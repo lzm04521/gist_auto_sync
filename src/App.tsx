@@ -1,19 +1,75 @@
-import { Layout } from "antd";
+import { HashRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Layout, Menu } from "antd";
+import {
+  AppstoreOutlined,
+  CloudSyncOutlined,
+  SettingOutlined,
+  UserOutlined,
+} from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
+import Accounts from "./pages/Accounts";
+import Dashboard from "./pages/Dashboard";
+import Mappings from "./pages/Mappings";
+import Settings from "./pages/Settings";
 
 const { Sider, Header, Content } = Layout;
 
-export default function App() {
+const menuItems = [
+  { key: "/", icon: <AppstoreOutlined />, ns: "menu.dashboard" },
+  { key: "/mappings", icon: <CloudSyncOutlined />, ns: "menu.mappings" },
+  { key: "/accounts", icon: <UserOutlined />, ns: "menu.accounts" },
+  { key: "/settings", icon: <SettingOutlined />, ns: "menu.settings" },
+];
+
+function AppLayout() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const location = useLocation();
+
   return (
     <Layout style={{ minHeight: "100vh" }}>
-      <Sider>
-        <div style={{ color: "#fff", padding: 16, fontWeight: 600 }}>
-          Gist Auto Sync
+      <Sider theme="dark" width={200}>
+        <div
+          style={{
+            color: "#fff",
+            padding: 16,
+            fontWeight: 600,
+            fontSize: 16,
+          }}
+        >
+          {t("app.title")}
         </div>
+        <Menu
+          theme="dark"
+          mode="inline"
+          selectedKeys={[location.pathname]}
+          items={menuItems.map(({ key, icon, ns }) => ({
+            key,
+            icon,
+            label: t(ns),
+          }))}
+          onClick={({ key }) => navigate(key)}
+        />
       </Sider>
       <Layout>
-        <Header style={{ background: "#fff" }} />
-        <Content style={{ padding: 24 }} />
+        <Header style={{ background: "#fff", padding: "0 24px" }} />
+        <Content style={{ padding: 24 }}>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/mappings" element={<Mappings />} />
+            <Route path="/accounts" element={<Accounts />} />
+            <Route path="/settings" element={<Settings />} />
+          </Routes>
+        </Content>
       </Layout>
     </Layout>
+  );
+}
+
+export default function App() {
+  return (
+    <HashRouter>
+      <AppLayout />
+    </HashRouter>
   );
 }

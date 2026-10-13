@@ -1,0 +1,31 @@
+{
+  "app": {
+    "title": "Gist Auto Sync"
+  },
+  "menu": {
+    "dashboard": "Dashboard",
+    "mappings": "Mappings",
+    "accounts": "Accounts",
+    "settings": "Settings"
+  },
+  "common": {
+    "ok": "OK",
+    "cancel": "Cancel",
+    "save": "Save",
+    "create": "New",
+    "edit": "Edit",
+    "delete": "Delete",
+    "retry": "Retry",
+    "loading": "Loading…",
+    "empty": "No data"
+  },
+  "status": {
+    "idle": "Idle",
+    "uploading": "Uploading",
+    "downloading": "Downloading",
+    "conflict": "Conflict",
+    "error": "Error",
+    "missing": "Missing",
+    "paused": "Paused"
+  }
+}

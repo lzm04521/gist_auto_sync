@@ -1,0 +1,31 @@
+{
+  "app": {
+    "title": "Gist Auto Sync"
+  },
+  "menu": {
+    "dashboard": "仪表盘",
+    "mappings": "同步映射",
+    "accounts": "账号",
+    "settings": "设置"
+  },
+  "common": {
+    "ok": "确定",
+    "cancel": "取消",
+    "save": "保存",
+    "create": "新建",
+    "edit": "编辑",
+    "delete": "删除",
+    "retry": "重试",
+    "loading": "加载中…",
+    "empty": "暂无数据"
+  },
+  "status": {
+    "idle": "正常",
+    "uploading": "上传中",
+    "downloading": "下载中",
+    "conflict": "冲突",
+    "error": "错误",
+    "missing": "文件缺失",
+    "paused": "已暂停"
+  }
+}
