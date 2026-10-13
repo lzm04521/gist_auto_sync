@@ -417,6 +417,7 @@ pub fn settings_get(state: State<'_, AppState>) -> GlobalSettings {
 
 #[tauri::command]
 pub fn settings_update(
+    app: AppHandle,
     state: State<'_, AppState>,
     settings: GlobalSettings,
 ) -> Result<(), String> {
@@ -433,6 +434,8 @@ pub fn settings_update(
         return Err("语言仅支持 zh-CN/en".into());
     }
     let debounce_changed = state.config.read().settings.debounce_seconds != settings.debounce_seconds;
+    let auto_start_changed = state.config.read().settings.auto_start != settings.auto_start;
+    let auto_start_target = settings.auto_start;
     state
         .config
         .update(|c| c.settings = settings)
@@ -440,7 +443,17 @@ pub fn settings_update(
     if debounce_changed {
         state.engine.apply_watch_set().map_err(|e| e.to_string())?;
     }
-    // autoStart 与 autostart 插件的联动在 T13（应用外壳）接线
+    // 开机自启联动 autostart 插件
+    if auto_start_changed {
+        use tauri_plugin_autostart::ManagerExt;
+        let autolaunch = app.autolaunch();
+        let result = if auto_start_target {
+            autolaunch.enable()
+        } else {
+            autolaunch.disable()
+        };
+        result.map_err(|e| format!("更新开机自启设置失败: {e}"))?;
+    }
     Ok(())
 }
 
