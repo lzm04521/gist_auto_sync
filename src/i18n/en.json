@@ -48,5 +48,26 @@
     "keepToken": "Leave empty to keep current token",
     "github": "GitHub Gist",
     "opengist": "Opengist"
+  },
+  "mappings": {
+    "localPath": "Local file",
+    "chooseFile": "Choose file",
+    "account": "Account",
+    "gist": "Gist",
+    "gistSelect": "From list",
+    "gistManual": "Enter ID",
+    "gistFilename": "Filename in gist",
+    "gistFilenameHint": "Defaults to the local filename",
+    "upload": "Local → Remote",
+    "download": "Remote → Local",
+    "direction": "Direction",
+    "localPathRequired": "Choose or type a local file path",
+    "accountRequired": "Choose an account",
+    "gistIdRequired": "Choose or type a gist",
+    "create": "New mapping",
+    "edit": "Edit mapping",
+    "loadingGists": "Loading gists…",
+    "uploadEnabled": "Upload",
+    "downloadEnabled": "Download"
   }
 }
