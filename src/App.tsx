@@ -1,5 +1,7 @@
 import { HashRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { Layout, Menu } from "antd";
+import { App as AntApp, ConfigProvider, Layout, Menu } from "antd";
+import zhCN from "antd/locale/zh_CN";
+import enUS from "antd/locale/en_US";
 import {
   AppstoreOutlined,
   CloudSyncOutlined,
@@ -67,9 +69,15 @@ function AppLayout() {
 }
 
 export default function App() {
+  const { i18n } = useTranslation();
+  const antdLocale = i18n.language.startsWith("zh") ? zhCN : enUS;
   return (
-    <HashRouter>
-      <AppLayout />
-    </HashRouter>
+    <ConfigProvider locale={antdLocale}>
+      <AntApp>
+        <HashRouter>
+          <AppLayout />
+        </HashRouter>
+      </AntApp>
+    </ConfigProvider>
   );
 }

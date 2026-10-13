@@ -27,5 +27,26 @@
     "error": "Error",
     "missing": "Missing",
     "paused": "Paused"
+  },
+  "accounts": {
+    "name": "Name",
+    "provider": "Type",
+    "baseUrl": "Instance URL",
+    "token": "Access token",
+    "tokenHint": "GitHub: Settings → Developer settings → Personal access tokens (classic, gist scope); Opengist: Settings → Access Tokens",
+    "nameRequired": "Name is required",
+    "baseUrlRequired": "Opengist instance URL is required",
+    "tokenRequired": "Access token is required",
+    "create": "New account",
+    "edit": "Edit account",
+    "testConnection": "Test connection",
+    "testOk": "Connected: {{login}}",
+    "testFailed": "Connection failed",
+    "delete": "Delete",
+    "deleteConfirm": "Delete this account?",
+    "forceDelete": "Force delete",
+    "keepToken": "Leave empty to keep current token",
+    "github": "GitHub Gist",
+    "opengist": "Opengist"
   }
 }

@@ -27,5 +27,26 @@
     "error": "错误",
     "missing": "文件缺失",
     "paused": "已暂停"
+  },
+  "accounts": {
+    "name": "名称",
+    "provider": "类型",
+    "baseUrl": "实例地址",
+    "token": "访问令牌",
+    "tokenHint": "GitHub：Settings → Developer settings → Personal access tokens（classic，勾选 gist）；Opengist：设置 → Access Tokens",
+    "nameRequired": "请输入名称",
+    "baseUrlRequired": "请输入 Opengist 实例地址",
+    "tokenRequired": "请输入访问令牌",
+    "create": "新建账号",
+    "edit": "编辑账号",
+    "testConnection": "测试连接",
+    "testOk": "连接成功：{{login}}",
+    "testFailed": "连接失败",
+    "delete": "删除",
+    "deleteConfirm": "确定删除该账号？",
+    "forceDelete": "强制删除",
+    "keepToken": "留空表示保留原令牌",
+    "github": "GitHub Gist",
+    "opengist": "Opengist"
   }
 }
