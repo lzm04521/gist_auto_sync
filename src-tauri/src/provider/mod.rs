@@ -97,6 +97,30 @@ fn parse_retry_after(raw: Option<&str>) -> Option<Duration> {
     raw?.trim().parse::<u64>().ok().map(Duration::from_secs)
 }
 
+/// 共享：非 2xx 响应 → 分类后的 ProviderError（读 Retry-After 与 body 片段）
+pub(crate) async fn check_response(resp: reqwest::Response) -> Result<reqwest::Response, ProviderError> {
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(resp);
+    }
+    let retry_after = resp
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let body = resp.text().await.unwrap_or_default();
+    Err(map_status(
+        status,
+        retry_after.as_deref(),
+        &truncate_hint(&body),
+    ))
+}
+
+/// 错误 body 只留前 300 字符，避免长 HTML 进错误消息
+fn truncate_hint(body: &str) -> String {
+    body.chars().take(300).collect()
+}
+
 /// gist 服务统一接口：GitHub Gist 与 Opengist 各一实现。
 /// 注意：原生 async fn in trait 在 rustc 1.95 仍不兼容 dyn（E0038），
 /// Box<dyn GistProvider> 需要 async_trait 宏做 Box 化（见台账 Task 4 裁决）。
