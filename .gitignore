@@ -7,7 +7,6 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
 dist
 dist-ssr
 *.local
@@ -22,3 +21,28 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Rust 构建产物
+src-tauri/target/
+
+# Tauri 生成
+src-tauri/gen/
+
+# Node
+node_modules/
+
+# SDD scratch（进度账本，本地用）
+.superpowers/
+
+# OS
+.DS_Store
+Thumbs.db
+
+docs/*
+doc/*
+.playwright-mcp/*
+
+AGENTS.md
+CLAUDE.md
+paseo.json
+codegraph.json
