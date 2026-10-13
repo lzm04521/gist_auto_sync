@@ -334,7 +334,7 @@ fn emit_status(ctx: &SyncCtx, mapping: &Mapping, status: MappingStatus, message:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::{GistDetail, GistFile, GistSummary, UserInfo};
+    use crate::provider::{GistDetail, GistSummary, UserInfo};
     use std::fs;
 
     /// 测试用可编程 provider

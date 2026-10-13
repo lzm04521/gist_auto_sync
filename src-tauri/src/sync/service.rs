@@ -453,7 +453,7 @@ mod tests {
         f.engine.set_global_paused(true);
         let status = f.engine.run_one("m1", Trigger::ManualUpload).await;
         assert_eq!(status, MappingStatus::Idle);
-        assert!(fs::read_to_string(&f.local_path).unwrap().len() > 0);
+        assert!(!fs::read_to_string(&f.local_path).unwrap().is_empty());
     }
 
     #[tokio::test]
