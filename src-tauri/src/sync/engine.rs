@@ -629,3 +629,4 @@ mod tests {
         assert_eq!(status2, MappingStatus::Conflict);
     }
 }
+
