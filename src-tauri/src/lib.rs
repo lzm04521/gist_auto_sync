@@ -2,6 +2,7 @@ pub mod config;
 pub mod model;
 pub mod provider;
 pub mod secrets;
+pub mod sync;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
