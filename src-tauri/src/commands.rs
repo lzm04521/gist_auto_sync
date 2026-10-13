@@ -459,6 +459,51 @@ pub fn settings_update(
 
 // ── 其他 ─────────────────────────────────────────────────────────────
 
+/// 冲突弹窗预览：本地当前内容 vs 远端当前内容
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictPreview {
+    pub local: Option<String>,
+    pub remote: Option<String>,
+}
+
+#[tauri::command]
+pub async fn conflict_preview(
+    state: State<'_, AppState>,
+    mapping_id: String,
+) -> Result<ConflictPreview, String> {
+    let mapping = state
+        .config
+        .read()
+        .mappings
+        .into_iter()
+        .find(|m| m.id == mapping_id)
+        .ok_or("映射不存在")?;
+    let account = state
+        .config
+        .read()
+        .accounts
+        .into_iter()
+        .find(|a| a.id == mapping.account_id)
+        .ok_or("账号不存在")?;
+    let local = std::fs::read_to_string(&mapping.local_path).ok();
+    let provider = state
+        .ctx_providers()
+        .get_or_build(&account)
+        .await
+        .map_err(|e| e.to_string())?;
+    let detail = provider
+        .get_gist(&mapping.gist_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let remote = detail
+        .files
+        .into_iter()
+        .find(|f| f.filename == mapping.gist_filename)
+        .and_then(|f| f.content);
+    Ok(ConflictPreview { local, remote })
+}
+
 #[tauri::command]
 pub fn app_open_log_dir(state: State<'_, AppState>) -> Result<(), String> {
     std::fs::create_dir_all(&state.log_dir).map_err(|e| e.to_string())?;

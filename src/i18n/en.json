@@ -69,5 +69,24 @@
     "loadingGists": "Loading gists…",
     "uploadEnabled": "Upload",
     "downloadEnabled": "Download"
+  },
+  "dashboard": {
+    "uploadNow": "Upload now",
+    "downloadNow": "Download now",
+    "pause": "Pause",
+    "resume": "Enable",
+    "resolve": "Resolve conflict",
+    "lastSynced": "Last synced",
+    "globalPause": "Pause all",
+    "file": "File",
+    "gist": "Gist"
+  },
+  "conflict": {
+    "title": "Resolve conflict",
+    "desc": "Both local and remote have unsynced changes. Pick a side to keep (the overwritten side is archived to history)",
+    "local": "Local",
+    "remote": "Remote",
+    "useLocal": "Overwrite remote with local",
+    "useRemote": "Overwrite local with remote"
   }
 }

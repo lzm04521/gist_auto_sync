@@ -69,5 +69,24 @@
     "loadingGists": "加载 gists…",
     "uploadEnabled": "上传",
     "downloadEnabled": "下载"
+  },
+  "dashboard": {
+    "uploadNow": "立即上传",
+    "downloadNow": "立即下载",
+    "pause": "暂停",
+    "resume": "启用",
+    "resolve": "解决冲突",
+    "lastSynced": "最后同步",
+    "globalPause": "全局暂停",
+    "file": "文件",
+    "gist": "Gist"
+  },
+  "conflict": {
+    "title": "解决冲突",
+    "desc": "本地与远端都有未同步的修改，请选择保留哪一边（被覆盖一侧的旧内容会自动存入历史）",
+    "local": "本地",
+    "remote": "远端",
+    "useLocal": "用本地覆盖远端",
+    "useRemote": "用远端覆盖本地"
   }
 }

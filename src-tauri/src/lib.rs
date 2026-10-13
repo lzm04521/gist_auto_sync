@@ -108,6 +108,7 @@ pub fn run() {
             commands::sync_is_paused,
             commands::settings_get,
             commands::settings_update,
+            commands::conflict_preview,
             commands::app_open_log_dir,
         ])
         .run(tauri::generate_context!())

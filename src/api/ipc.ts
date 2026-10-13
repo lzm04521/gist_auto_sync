@@ -67,6 +67,15 @@ export const settingsUpdate = (settings: GlobalSettings) =>
 
 export const appOpenLogDir = () => invoke<void>("app_open_log_dir");
 
+/** 冲突弹窗预览：本地 vs 远端当前内容 */
+export interface ConflictPreview {
+  local: string | null;
+  remote: string | null;
+}
+
+export const conflictPreview = (mappingId: string) =>
+  invoke<ConflictPreview>("conflict_preview", { mappingId });
+
 // ── 事件 ─────────────────────────────────────────────────────────────
 
 export function onStatusEvent(cb: (event: StatusEvent) => void) {
