@@ -83,9 +83,18 @@ impl FileWatcher {
             },
         )?;
 
+        // 单个目录监听失败（如离线的移动盘/网络盘）只跳过并告警，不整体失败
+        let mut watched_count = 0usize;
+        let total = dirs.len();
         for dir in dirs {
             let dir = PathBuf::from(dir);
-            watcher.watch(&dir, notify::RecursiveMode::NonRecursive)?;
+            match watcher.watch(&dir, notify::RecursiveMode::NonRecursive) {
+                Ok(()) => watched_count += 1,
+                Err(e) => tracing::warn!("监听目录失败（已跳过）: {dir:?} — {e}"),
+            }
+        }
+        if total > 0 && watched_count == 0 {
+            return Err(notify::Error::new(notify::ErrorKind::WatchNotFound));
         }
 
         let debounce_out = out;
@@ -124,6 +133,27 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    // ── 终审修复通道：单个不可监听目录跳过而非整体失败 ──
+    #[tokio::test]
+    async fn watcher_start_skips_unwatchable_dir_but_keeps_rest() {
+        let (out_tx, _out_rx) = mpsc::channel(16);
+        let ghost = std::env::temp_dir().join("gistsync-ghost-dir").join("f.md");
+        let real = tempfile::tempdir().unwrap();
+        let real_file = real.path().join("a.md");
+        std::fs::write(&real_file, "x").unwrap();
+
+        let result = FileWatcher::start(vec![ghost, real_file], Duration::from_secs(1), out_tx);
+        assert!(result.is_ok(), "单个失败目录应被跳过");
+    }
+
+    #[tokio::test]
+    async fn watcher_start_all_dirs_unwatchable_errors() {
+        let (out_tx, _out_rx) = mpsc::channel(16);
+        let ghost = std::env::temp_dir().join("gistsync-ghost-dir2").join("f.md");
+        let result = FileWatcher::start(vec![ghost], Duration::from_secs(1), out_tx);
+        assert!(result.is_err());
     }
 
     #[tokio::test(start_paused = true)]

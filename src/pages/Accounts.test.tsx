@@ -104,10 +104,11 @@ describe("Accounts page", () => {
     expect(await screen.findByText(/octocat/)).toBeInTheDocument();
   });
 
-  it("删除被引用账号时展示后端错误信息", async () => {
+  it("删除被引用账号时按结构化错误码弹出强制删除确认", async () => {
     mocks.accountList.mockResolvedValue([githubAccount]);
+    // 后端结构化错误：{"code":"ACCOUNT_IN_USE","count":2}
     mocks.accountDelete.mockRejectedValue(
-      new Error("该账号还有 2 条同步映射；删除映射后再试，或选择强制删除（将一并删除映射与其快照）"),
+      new Error('{"code":"ACCOUNT_IN_USE","count":2}'),
     );
     render(
       <AntApp>
@@ -118,9 +119,9 @@ describe("Accounts page", () => {
     await userEvent.click(await screen.findByRole("button", { name: /删\s*除/ }));
     // Popconfirm 确认
     await userEvent.click(await screen.findByRole("button", { name: /^OK$|^确\s*定$/ }));
-    // 错误信息同时出现在 toast 与"强制删除"确认弹窗中
+    // 强制删除确认弹窗展示结构化数量信息
     expect(
-      (await screen.findAllByText(/该账号还有 2 条同步映射/)).length,
-    ).toBeGreaterThan(0);
+      await screen.findByText(/该账号还有 2 条同步映射/),
+    ).toBeInTheDocument();
   });
 });

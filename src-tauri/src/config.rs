@@ -43,11 +43,25 @@ impl ConfigStore {
 
     /// 应用变更并原子落盘；返回更新后的配置快照
     pub fn update<F: FnOnce(&mut AppConfig)>(&self, f: F) -> Result<AppConfig, ConfigError> {
+        self.try_update::<_, std::convert::Infallible>(|c| {
+            f(c);
+            Ok(())
+        })
+        .map(|r| r.expect("Infallible 不可能为 Err"))
+    }
+
+    /// 校验+变更原子化：闭包返回 Err 时不落盘不改内存（消除唯一性校验 TOCTOU）
+    pub fn try_update<F, E>(&self, f: F) -> Result<Result<AppConfig, E>, ConfigError>
+    where
+        F: FnOnce(&mut AppConfig) -> Result<(), E>,
+    {
         let mut next = self.read();
-        f(&mut next);
+        if let Err(e) = f(&mut next) {
+            return Ok(Err(e));
+        }
         Self::save_to_disk(&next, &self.path)?;
         *self.config.write().expect("config lock poisoned") = next.clone();
-        Ok(next)
+        Ok(Ok(next))
     }
 
     pub fn config_path(&self) -> &Path {
@@ -130,6 +144,34 @@ mod tests {
         assert_eq!(cfg.accounts, vec![sample_account()]);
         assert_eq!(cfg.mappings, vec![sample_mapping()]);
         assert_eq!(cfg.settings.debounce_seconds, 10);
+    }
+
+    #[test]
+    fn try_update_rejects_without_side_effect() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let store = ConfigStore::load_from(path.clone()).unwrap();
+
+        let err = "重复";
+        let outcome: Result<_, String> = store
+            .try_update::<_, String>(|_| Err(err.to_string()))
+            .unwrap()
+            .map(|_| ())
+        ;
+        assert_eq!(outcome.unwrap_err(), err);
+        // 未落盘：文件不存在；内存未变
+        assert!(!path.exists());
+        assert!(store.read().accounts.is_empty());
+
+        // Ok 路径正常落盘
+        store
+            .try_update::<_, String>(|c| {
+                c.settings.debounce_seconds = 7;
+                Ok(())
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(store.read().settings.debounce_seconds, 7);
     }
 
     #[test]

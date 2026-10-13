@@ -155,9 +155,16 @@ export default function Dashboard() {
                 <Button size="small" onClick={() => void manual(v, "download")}>
                   {t("dashboard.downloadNow")}
                 </Button>
-                {v.status === "conflict" && (
-                  <Button size="small" type="primary" danger onClick={() => setConflictView(v)}>
-                    {t("dashboard.resolve")}
+                {(v.status === "conflict" || v.status === "missing") && (
+                  <Button
+                    size="small"
+                    type="primary"
+                    danger={v.status === "conflict"}
+                    onClick={() => setConflictView(v)}
+                  >
+                    {v.status === "conflict"
+                      ? t("dashboard.resolve")
+                      : t("dashboard.recover")}
                   </Button>
                 )}
                 <Button size="small" onClick={() => void toggleEnabled(v)}>

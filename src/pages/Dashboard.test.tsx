@@ -158,3 +158,18 @@ describe("Dashboard", () => {
     await waitFor(() => expect(mocks.syncManual).toHaveBeenCalledWith("m1", "upload"));
   });
 });
+
+describe("Dashboard missing recovery", () => {
+  it("Missing 行显示恢复按钮并可打开处理弹窗", async () => {
+    mocks.mappingList.mockResolvedValue([view({ status: "missing" })]);
+    mocks.conflictPreview.mockResolvedValue({ local: null, remote: "远端还在的内容" });
+    render(
+      <AntApp>
+        <Dashboard />
+      </AntApp>,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: /恢\s*复/ }));
+    // 弹窗打开并渲染远端内容（本地缺失一侧为空）
+    await waitFor(() => expect(screen.getByText("远端还在的内容")).toBeInTheDocument());
+  });
+});

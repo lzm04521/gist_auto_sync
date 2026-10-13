@@ -47,7 +47,8 @@
     "forceDelete": "Force delete",
     "keepToken": "Leave empty to keep current token",
     "github": "GitHub Gist",
-    "opengist": "Opengist"
+    "opengist": "Opengist",
+    "forceDeleteConfirm": "This account still has {{count}} mappings; force delete removes them together with their snapshots."
   },
   "mappings": {
     "localPath": "Local file",
@@ -79,7 +80,8 @@
     "lastSynced": "Last synced",
     "globalPause": "Pause all",
     "file": "File",
-    "gist": "Gist"
+    "gist": "Gist",
+    "recover": "Recover"
   },
   "conflict": {
     "title": "Resolve conflict",

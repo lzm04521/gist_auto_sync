@@ -111,17 +111,28 @@ export default function Accounts() {
       await reload();
     } catch (e) {
       const text = String(e);
-      void message.error(text);
-      // 被映射引用时的引导：提供强制删除入口
-      if (text.includes("映射")) {
-        modal.confirm({
-          title: t("accounts.forceDelete"),
-          content: text,
-          okText: t("accounts.forceDelete"),
-          okButtonProps: { danger: true },
-          onOk: () => doDelete(account, true),
-        });
+      // 结构化错误：{"code":"ACCOUNT_IN_USE","count":N} —— 按 code 分支，不匹配中文文案
+      const jsonPart = text.match(/\{[\s\S]*\}/)?.[0];
+      if (jsonPart) {
+        try {
+          const parsed = JSON.parse(jsonPart) as { code?: string; count?: number };
+          if (parsed.code === "ACCOUNT_IN_USE") {
+            modal.confirm({
+              title: t("accounts.forceDelete"),
+              content: t("accounts.forceDeleteConfirm", {
+                count: parsed.count ?? 0,
+              }),
+              okText: t("accounts.forceDelete"),
+              okButtonProps: { danger: true },
+              onOk: () => doDelete(account, true),
+            });
+            return;
+          }
+        } catch {
+          // 非法 JSON：按原文展示
+        }
       }
+      void message.error(text);
     }
   };
 

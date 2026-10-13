@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::model::Mapping;
-use crate::sync::engine::{run_sync_cycle, MappingStatus, SyncCtx, Trigger};
+use crate::sync::engine::{run_sync_cycle_with_hint, MappingStatus, SyncCtx, Trigger};
 use crate::sync::watcher::FileWatcher;
 
 /// 持久化状态（statuses.json），重启后恢复 Conflict/Error/Missing/Paused
@@ -55,9 +55,12 @@ impl Engine {
         })
     }
 
-    /// 启动常驻任务：settled 分发器 + 轮询循环
+    /// 启动常驻任务：settled 分发器 + 轮询循环。
+    /// watcher 失败只降级（轮询/对账照常），不整体瘫痪。
     pub fn start(self: &Arc<Self>) -> Result<(), String> {
-        self.apply_watch_set()?;
+        if let Err(e) = self.apply_watch_set() {
+            tracing::error!("文件监听启动失败（本轮降级为仅轮询）: {e}");
+        }
 
         // settled 分发器：接管 settled_rx（重建 watcher 只换生产端）
         let rx = self
@@ -126,15 +129,21 @@ impl Engine {
                 .expect("last_poll lock poisoned")
                 .get(&account.id)
                 .cloned();
-            if let Ok(list) = provider.list_gists(since).await {
-                for g in list {
-                    changed.insert((account.id.clone(), g.id));
+            match provider.list_gists(since).await {
+                Ok(list) => {
+                    for g in list {
+                        changed.insert((account.id.clone(), g.id));
+                    }
+                    // 仅成功时推进 since：失败窗口的变更留给下一轮全量补偿
+                    self.last_poll
+                        .lock()
+                        .expect("last_poll lock poisoned")
+                        .insert(account.id.clone(), Utc::now());
+                }
+                Err(e) => {
+                    tracing::warn!("[{}] 轮询列表失败（since 不推进）: {e}", account.id);
                 }
             }
-            self.last_poll
-                .lock()
-                .expect("last_poll lock poisoned")
-                .insert(account.id.clone(), Utc::now());
         }
 
         for m in mappings {
@@ -197,9 +206,9 @@ impl Engine {
         self.run_mapping_tracked(&m, trigger).await
     }
 
-    /// 内部：执行 + 记录 + 自动触发失败时安排退避重试
+    /// 内部：执行 + 记录 + 自动触发失败时安排退避重试（限流错误优先用 Retry-After）
     async fn run_mapping_tracked(self: &Arc<Self>, m: &Mapping, trigger: Trigger) -> MappingStatus {
-        let status = run_sync_cycle(&self.ctx, m, trigger).await;
+        let (status, rate_hint) = run_sync_cycle_with_hint(&self.ctx, m, trigger).await;
         self.record_status(&m.id, status, None);
         let is_auto = matches!(trigger, Trigger::LocalSettled | Trigger::Poll);
         if is_auto && status == MappingStatus::Error {
@@ -209,7 +218,7 @@ impl Engine {
                 map.insert(m.id.clone(), next);
                 next
             };
-            self.schedule_retry(m.id.clone(), attempt);
+            self.schedule_retry(m.id.clone(), attempt, rate_hint);
         } else if status == MappingStatus::Idle {
             self.retry_attempts
                 .lock()
@@ -220,10 +229,13 @@ impl Engine {
     }
 
     /// 退避重试（独立方法避免 spawn 块与 tracked 形成 Send 循环依赖）
-    fn schedule_retry(self: &Arc<Self>, mapping_id: String, attempt: u32) {
+    fn schedule_retry(self: &Arc<Self>, mapping_id: String, attempt: u32, hint: Option<Duration>) {
+        let delay = hint
+            .filter(|d| !d.is_zero())
+            .unwrap_or_else(|| crate::sync::engine::backoff_delay(attempt));
         let engine = self.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(crate::sync::engine::backoff_delay(attempt)).await;
+            tokio::time::sleep(delay).await;
             if !engine.is_global_paused() {
                 engine.run_one(&mapping_id, Trigger::Poll).await;
             }
@@ -312,11 +324,18 @@ mod tests {
     struct FakeProvider {
         files: Mutex<Vec<(String, String, String)>>,
         calls: Mutex<Vec<&'static str>>,
+        list_since: Mutex<Vec<Option<DateTime<Utc>>>>,
+        fail_list: Mutex<bool>,
     }
 
     impl FakeProvider {
         fn new() -> Self {
-            Self { files: Mutex::new(vec![]), calls: Mutex::new(vec![]) }
+            Self {
+                files: Mutex::new(vec![]),
+                calls: Mutex::new(vec![]),
+                list_since: Mutex::new(vec![]),
+                fail_list: Mutex::new(false),
+            }
         }
         fn set_file(&self, gist_id: &str, filename: &str, content: &str) {
             self.files.lock().unwrap().retain(|(g, f, _)| !(g == gist_id && f == filename));
@@ -329,8 +348,24 @@ mod tests {
         async fn verify_token(&self) -> Result<UserInfo, ProviderError> {
             Ok(UserInfo { login: "fake".into(), name: None })
         }
-        async fn list_gists(&self, _since: Option<DateTime<Utc>>) -> Result<Vec<GistSummary>, ProviderError> {
-            Ok(vec![])
+        async fn list_gists(&self, since: Option<DateTime<Utc>>) -> Result<Vec<GistSummary>, ProviderError> {
+            if *self.fail_list.lock().unwrap() {
+                return Err(ProviderError::Network("list boom".into()));
+            }
+            self.list_since.lock().unwrap().push(since);
+            let mut ids: Vec<String> = self
+                .files
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(g, _, _)| g.clone())
+                .collect();
+            ids.sort();
+            ids.dedup();
+            Ok(ids
+                .into_iter()
+                .map(|id| GistSummary { id, description: None, updated_at: Utc::now(), files: vec![] })
+                .collect())
         }
         async fn get_gist(&self, gist_id: &str) -> Result<GistDetail, ProviderError> {
             self.calls.lock().unwrap().push("get");
@@ -475,5 +510,38 @@ mod tests {
         let f = fixture("local", "remote", None);
         let status = f.engine.run_one("no-such-mapping", Trigger::Poll).await;
         assert_eq!(status, MappingStatus::Error);
+    }
+
+    // ── 终审修复通道用例 ──
+
+    #[tokio::test]
+    async fn poll_list_failure_keeps_since_none() {
+        let f = fixture("old", "new remote", Some("old"));
+        *f.fake.fail_list.lock().unwrap() = true;
+        f.engine.poll_round().await;
+        *f.fake.fail_list.lock().unwrap() = false;
+        f.engine.poll_round().await;
+
+        let sinces = f.fake.list_since.lock().unwrap().clone();
+        assert_eq!(sinces.len(), 1, "失败轮不应记录 since");
+        assert_eq!(sinces[0], None, "首轮失败后 since 不得推进，第二轮应全量补偿");
+        // 第二轮以 None 全量拉取 → 命中变更 → 本地已下载
+        assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "new remote");
+    }
+
+    /// schedule_retry 的 hint 优先逻辑（hint 非零则覆盖指数退避）
+    #[test]
+    fn retry_hint_overrides_backoff() {
+        let hint = Some(Duration::from_secs(42));
+        let attempt = 3;
+        let delay = hint
+            .filter(|d| !d.is_zero())
+            .unwrap_or_else(|| crate::sync::engine::backoff_delay(attempt));
+        assert_eq!(delay, Duration::from_secs(42));
+        let none: Option<Duration> = None;
+        let delay2 = none
+            .filter(|d| !d.is_zero())
+            .unwrap_or_else(|| crate::sync::engine::backoff_delay(3));
+        assert_eq!(delay2, Duration::from_secs(4));
     }
 }

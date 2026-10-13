@@ -49,6 +49,21 @@ pub fn run() {
                 eprintln!("{e}");
             }
 
+            // 开机自启按设置显式对齐一次：首次安装（默认 autoStart=true）也要注册成功
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let autolaunch = handle.autolaunch();
+                let want = config.read().settings.auto_start;
+                let result = if want {
+                    autolaunch.enable()
+                } else {
+                    autolaunch.disable()
+                };
+                if let Err(e) = result {
+                    tracing::warn!("对齐开机自启设置失败: {e}");
+                }
+            }
+
             let sink: Arc<dyn sync::engine::StatusSink> =
                 Arc::new(commands::IpcSink { app: handle.clone() });
             let ctx = Arc::new(SyncCtx {

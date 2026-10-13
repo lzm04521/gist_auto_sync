@@ -357,6 +357,30 @@ mod tests {
         assert_eq!(detail.files[0].content.as_deref(), Some("new content"));
     }
 
+    // ── 终审修复：GitHub primary rate limit（403 + X-RateLimit 头）应映射 RateLimited ──
+    #[tokio::test]
+    async fn github_primary_rate_limit_403_maps_to_rate_limited() {
+        let server = MockServer::start().await;
+        let reset = chrono::Utc::now().timestamp() + 120;
+        Mock::given(method("GET"))
+            .and(path("/user"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .insert_header("x-ratelimit-remaining", "0")
+                    .insert_header("x-ratelimit-reset", reset.to_string())
+                    .set_body_string("rate limit exceeded"),
+            )
+            .mount(&server)
+            .await;
+        match provider(&server).verify_token().await.unwrap_err() {
+            ProviderError::RateLimited { retry_after: Some(d) } => {
+                let secs = d.as_secs();
+                assert!((90..=140).contains(&secs), "reset 距今约 120s，实际 {secs}");
+            }
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn error_401_maps_to_auth() {
         let server = MockServer::start().await;

@@ -114,7 +114,15 @@ pub struct SyncCtx {
 
 /// 单次同步循环（spec §6.1/6.2/6.5）。返回最终状态；过程经 sink 推送。
 pub async fn run_sync_cycle(ctx: &SyncCtx, mapping: &Mapping, trigger: Trigger) -> MappingStatus {
-    // ── 本地读取（非 UTF-8 → Error，映射创建时已校验过，此处兜底）
+    run_sync_cycle_with_hint(ctx, mapping, trigger).await.0
+}
+
+/// 同 run_sync_cycle，额外返回限流重试提示（RateLimited.retry_after）
+pub async fn run_sync_cycle_with_hint(
+    ctx: &SyncCtx,
+    mapping: &Mapping,
+    trigger: Trigger,
+) -> (MappingStatus, Option<Duration>) {
     let (local_raw, local_mtime) = match std::fs::read_to_string(&mapping.local_path) {
         Ok(text) => {
             let mtime = std::fs::metadata(&mapping.local_path)
@@ -124,7 +132,10 @@ pub async fn run_sync_cycle(ctx: &SyncCtx, mapping: &Mapping, trigger: Trigger) 
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, None),
         Err(e) => {
-            return emit_status(ctx, mapping, MappingStatus::Error, Some(format!("读取本地文件失败: {e}")), false);
+            return (
+                emit_status(ctx, mapping, MappingStatus::Error, Some(format!("读取本地文件失败: {e}")), false),
+                None,
+            );
         }
     };
     let local_hash = local_raw.as_ref().map(|t| sha256_hex(&normalize(t)));
@@ -134,7 +145,7 @@ pub async fn run_sync_cycle(ctx: &SyncCtx, mapping: &Mapping, trigger: Trigger) 
         && let (Some(h), Some(m)) = (&local_hash, local_mtime)
         && ctx.guard.should_suppress(&mapping.id, h, m)
     {
-        return MappingStatus::Idle;
+        return (MappingStatus::Idle, None);
     }
 
     // ── provider 解析
@@ -145,12 +156,15 @@ pub async fn run_sync_cycle(ctx: &SyncCtx, mapping: &Mapping, trigger: Trigger) 
         .into_iter()
         .find(|a| a.id == mapping.account_id);
     let Some(account) = account else {
-        return emit_status(ctx, mapping, MappingStatus::Error, Some("账号不存在".into()), false);
+        return (emit_status(ctx, mapping, MappingStatus::Error, Some("账号不存在".into()), false), None);
     };
     let provider = match ctx.providers.get_or_build(&account).await {
         Ok(p) => p,
         Err(e) => {
-            return emit_status(ctx, mapping, MappingStatus::Error, Some(e.to_string()), false)
+            return (
+                emit_status(ctx, mapping, MappingStatus::Error, Some(e.to_string()), false),
+                rate_limit_hint(&e),
+            )
         }
     };
 
@@ -158,7 +172,10 @@ pub async fn run_sync_cycle(ctx: &SyncCtx, mapping: &Mapping, trigger: Trigger) 
     let detail = match provider.get_gist(&mapping.gist_id).await {
         Ok(d) => d,
         Err(e) => {
-            return emit_status(ctx, mapping, MappingStatus::Error, Some(e.to_string()), false)
+            return (
+                emit_status(ctx, mapping, MappingStatus::Error, Some(e.to_string()), false),
+                rate_limit_hint(&e),
+            )
         }
     };
     let remote_file = detail
@@ -180,33 +197,35 @@ pub async fn run_sync_cycle(ctx: &SyncCtx, mapping: &Mapping, trigger: Trigger) 
         remote_hash: remote_hash.clone(),
     };
 
-    // ── 手动语义改写：显式覆盖意图优先于自动决策（spec：Manual 兼作冲突解决）
+    // ── 手动语义改写：显式覆盖意图优先于自动决策（spec：Manual 兼作冲突解决与 Missing 恢复）
     let decision = match trigger {
         Trigger::ManualUpload => {
             let Some(local) = &local_raw else {
-                return emit_status(ctx, mapping, MappingStatus::Error, Some("本地文件不存在".into()), false);
+                return (emit_status(ctx, mapping, MappingStatus::Error, Some("本地文件不存在".into()), false), None);
             };
             let local_changed = snapshot
                 .as_ref()
                 .map(|s| s.last_synced_hash != local_hash.clone().unwrap())
                 .unwrap_or(true);
             let _ = local;
-            if !local_changed {
-                return emit_status(ctx, mapping, MappingStatus::Idle, Some("本地无未同步修改".into()), false);
+            // 远端文件缺失（被改名/删除）时也放行：ManualUpload = 在远端重建（spec §6.3）
+            if !local_changed && remote_file.is_some() {
+                return (emit_status(ctx, mapping, MappingStatus::Idle, Some("本地无未同步修改".into()), false), None);
             }
             Decision::Upload
         }
         Trigger::ManualDownload => {
             let Some(remote) = &remote_raw else {
-                return emit_status(ctx, mapping, MappingStatus::Error, Some("远端不存在该文件".into()), false);
+                return (emit_status(ctx, mapping, MappingStatus::Error, Some("远端不存在该文件".into()), false), None);
             };
             let remote_changed = snapshot
                 .as_ref()
                 .map(|s| s.last_synced_hash != remote_hash.clone().unwrap())
                 .unwrap_or(true);
             let _ = remote;
-            if !remote_changed {
-                return emit_status(ctx, mapping, MappingStatus::Idle, Some("远端无变更".into()), false);
+            // 本地文件缺失（被删除）时也放行：ManualDownload = 恢复本地（spec §6.3）
+            if !remote_changed && local_raw.is_some() {
+                return (emit_status(ctx, mapping, MappingStatus::Idle, Some("远端无变更".into()), false), None);
             }
             Decision::Download
         }
@@ -215,7 +234,7 @@ pub async fn run_sync_cycle(ctx: &SyncCtx, mapping: &Mapping, trigger: Trigger) 
 
     let is_auto = matches!(trigger, Trigger::LocalSettled | Trigger::Poll);
 
-    match decision {
+    let status = match decision {
         Decision::Noop => MappingStatus::Idle,
         Decision::SeedSnapshot => {
             let hash = input.local_hash.clone().unwrap_or_default();
@@ -226,22 +245,27 @@ pub async fn run_sync_cycle(ctx: &SyncCtx, mapping: &Mapping, trigger: Trigger) 
                 remote_updated_at: Some(detail.updated_at),
             };
             if let Err(e) = ctx.snapshots.save(&mapping.id, &state) {
-                return emit_status(ctx, mapping, MappingStatus::Error, Some(format!("保存快照失败: {e}")), false);
+                tracing::error!("[{}] 建立同步基准失败: {e}", mapping.id);
+                return (emit_status(ctx, mapping, MappingStatus::Error, Some(format!("保存快照失败: {e}")), false), None);
             }
+            tracing::info!("[{}] 建立同步基准（首次映射两边一致）", mapping.id);
             emit_status(ctx, mapping, MappingStatus::Idle, Some("已建立同步基准".into()), true)
         }
         Decision::MissingLocal => {
+            tracing::warn!("[{}] 本地文件不存在或已删除，等待人工恢复", mapping.id);
             emit_status(ctx, mapping, MappingStatus::Missing, Some("本地文件不存在或已删除".into()), false)
         }
         Decision::MissingRemote => {
+            tracing::warn!("[{}] 远端 gist 中不存在该文件，等待人工恢复", mapping.id);
             emit_status(ctx, mapping, MappingStatus::Missing, Some("远端 gist 中不存在该文件".into()), false)
         }
         Decision::Conflict => {
+            tracing::warn!("[{}] 本地与远端均有未同步修改，已暂停等待人工选择", mapping.id);
             emit_status(ctx, mapping, MappingStatus::Conflict, Some("本地与远端均有未同步修改，请人工选择保留哪边".into()), false)
         }
         Decision::Upload => {
             if !mapping.upload_enabled && is_auto {
-                return emit_status(ctx, mapping, MappingStatus::Idle, Some("上传开关已关闭，跳过上传".into()), false);
+                return (emit_status(ctx, mapping, MappingStatus::Idle, Some("上传开关已关闭，跳过上传".into()), false), None);
             }
             emit_status(ctx, mapping, MappingStatus::Uploading, None, false);
             // 归档旧远端（远端文件不存在时无可归档）
@@ -252,6 +276,7 @@ pub async fn run_sync_cycle(ctx: &SyncCtx, mapping: &Mapping, trigger: Trigger) 
             }
             // 上传规范化内容（CRLF→LF），快照以回读为准
             let content = normalize(local_raw.as_deref().expect("Upload 分支必有本地内容"));
+            tracing::info!("[{}] 上传 {} → gist {}（{} 字节）", mapping.id, mapping.gist_filename, mapping.gist_id, content.len());
             match provider
                 .update_file(&mapping.gist_id, &mapping.gist_filename, &content)
                 .await
@@ -270,16 +295,23 @@ pub async fn run_sync_cycle(ctx: &SyncCtx, mapping: &Mapping, trigger: Trigger) 
                         remote_updated_at: Some(new_detail.updated_at),
                     };
                     if let Err(e) = ctx.snapshots.save(&mapping.id, &state) {
-                        return emit_status(ctx, mapping, MappingStatus::Error, Some(format!("保存快照失败: {e}")), false);
+                        return (emit_status(ctx, mapping, MappingStatus::Error, Some(format!("保存快照失败: {e}")), false), None);
                     }
+                    tracing::info!("[{}] 上传完成", mapping.id);
                     emit_status(ctx, mapping, MappingStatus::Idle, None, true)
                 }
-                Err(e) => emit_status(ctx, mapping, MappingStatus::Error, Some(e.to_string()), false),
+                Err(e) => {
+                    tracing::error!("[{}] 上传失败: {e}", mapping.id);
+                    return (
+                        emit_status(ctx, mapping, MappingStatus::Error, Some(e.to_string()), false),
+                        rate_limit_hint(&e),
+                    );
+                }
             }
         }
         Decision::Download => {
             if !mapping.download_enabled && is_auto {
-                return emit_status(ctx, mapping, MappingStatus::Idle, Some("下载开关已关闭，跳过下载".into()), false);
+                return (emit_status(ctx, mapping, MappingStatus::Idle, Some("下载开关已关闭，跳过下载".into()), false), None);
             }
             emit_status(ctx, mapping, MappingStatus::Downloading, None, false);
             // 归档旧本地
@@ -290,8 +322,9 @@ pub async fn run_sync_cycle(ctx: &SyncCtx, mapping: &Mapping, trigger: Trigger) 
             }
             // 写盘保留远端原始字节（spec §6.5）
             let raw = remote_raw.clone().expect("Download 分支必有远端内容");
+            tracing::info!("[{}] 下载 gist {}/{} → {}（{} 字节）", mapping.id, mapping.gist_id, mapping.gist_filename, mapping.local_path, raw.len());
             if let Err(e) = std::fs::write(&mapping.local_path, raw.as_bytes()) {
-                return emit_status(ctx, mapping, MappingStatus::Error, Some(format!("写入本地文件失败: {e}")), false);
+                return (emit_status(ctx, mapping, MappingStatus::Error, Some(format!("写入本地文件失败: {e}")), false), None);
             }
             let mtime = std::fs::metadata(&mapping.local_path)
                 .ok()
@@ -307,10 +340,20 @@ pub async fn run_sync_cycle(ctx: &SyncCtx, mapping: &Mapping, trigger: Trigger) 
                 remote_updated_at: Some(detail.updated_at),
             };
             if let Err(e) = ctx.snapshots.save(&mapping.id, &state) {
-                return emit_status(ctx, mapping, MappingStatus::Error, Some(format!("保存快照失败: {e}")), false);
+                return (emit_status(ctx, mapping, MappingStatus::Error, Some(format!("保存快照失败: {e}")), false), None);
             }
+            tracing::info!("[{}] 下载完成", mapping.id);
             emit_status(ctx, mapping, MappingStatus::Idle, None, true)
         }
+    };
+    (status, None)
+}
+
+/// RateLimited 错误 → 重试等待提示
+fn rate_limit_hint(e: &ProviderError) -> Option<Duration> {
+    match e {
+        ProviderError::RateLimited { retry_after } => *retry_after,
+        _ => None,
     }
 }
 
@@ -610,6 +653,37 @@ mod tests {
         let f2 = fixture("mine", "theirs", None);
         let status2 = run_sync_cycle(&f2.ctx, &f2.mapping, Trigger::Poll).await;
         assert_eq!(status2, MappingStatus::Conflict);
+    }
+
+    // ── 终审修复通道用例 ──
+
+    #[tokio::test]
+    async fn manual_upload_recreates_missing_remote() {
+        let f = fixture("base", "irrelevant", Some("base"));
+        f.fake.remove_file("gist1", "notes.md");
+        let status = run_sync_cycle(&f.ctx, &f.mapping, Trigger::ManualUpload).await;
+        assert_eq!(status, MappingStatus::Idle);
+        assert_eq!(f.fake.update_calls(), 1, "远端文件缺失时 ManualUpload 应在远端重建");
+    }
+
+    #[tokio::test]
+    async fn manual_download_restores_missing_local() {
+        let f = fixture("base", "base", Some("base"));
+        fs::remove_file(&f.local_path).unwrap();
+        let status = run_sync_cycle(&f.ctx, &f.mapping, Trigger::ManualDownload).await;
+        assert_eq!(status, MappingStatus::Idle);
+        assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "base", "本地缺失时 ManualDownload 应恢复本地");
+    }
+
+    #[tokio::test]
+    async fn rate_limited_error_carries_retry_hint() {
+        let f = fixture("local", "remote", Some("base"));
+        *f.fake.fail_next.lock().unwrap() = Some(ProviderError::RateLimited {
+            retry_after: Some(Duration::from_secs(30)),
+        });
+        let (status, hint) = run_sync_cycle_with_hint(&f.ctx, &f.mapping, Trigger::Poll).await;
+        assert_eq!(status, MappingStatus::Error);
+        assert_eq!(hint, Some(Duration::from_secs(30)));
     }
 
     #[tokio::test]

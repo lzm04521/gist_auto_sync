@@ -168,10 +168,10 @@ pub fn account_delete(state: State<'_, AppState>, id: String, force: bool) -> Re
         .filter(|m| m.account_id == id)
         .collect();
     if !mappings.is_empty() && !force {
-        return Err(format!(
-            "该账号还有 {} 条同步映射；删除映射后再试，或选择强制删除（将一并删除映射与其快照）",
-            mappings.len()
-        ));
+        // 结构化错误（JSON），前端按 code 分支而非匹配中文文案
+        return Err(
+            serde_json::json!({ "code": "ACCOUNT_IN_USE", "count": mappings.len() }).to_string(),
+        );
     }
     for m in &mappings {
         let _ = state.snapshots.remove_mapping(&m.id);
@@ -231,6 +231,18 @@ pub fn mapping_list(state: State<'_, AppState>) -> Vec<MappingView> {
         .collect()
 }
 
+/// 统一存储路径：canonicalize 并去掉 `\\?\` 前缀；文件不存在则仅统一分隔符。
+/// 保证 watcher（notify 以 watch 目录 + `\` 拼接事件路径）能命中手填的正斜杠路径。
+fn normalize_stored_path(raw: &str) -> String {
+    match std::fs::canonicalize(raw) {
+        Ok(p) => p
+            .to_string_lossy()
+            .trim_start_matches(r"\\?\")
+            .to_string(),
+        Err(_) => raw.replace('/', "\\"),
+    }
+}
+
 /// 映射输入校验：文件存在、UTF-8、localPath 唯一（大小写不敏感）、(账号,gist,文件名) 唯一
 fn validate_mapping(
     state: &AppState,
@@ -280,7 +292,7 @@ fn validate_mapping(
             return Err("该账号下相同 gist 的相同文件已有映射".into());
         }
     }
-    Ok((input.local_path.clone(), gist_filename))
+    Ok((normalize_stored_path(&input.local_path), gist_filename))
 }
 
 #[tauri::command]
@@ -296,10 +308,34 @@ pub fn mapping_create(state: State<'_, AppState>, input: MappingInput) -> Result
         download_enabled: input.download_enabled,
         enabled: input.enabled,
     };
-    state
+    // 唯一性校验放进 update 闭包内，消除"校验后-写入前"的并发窗口（TOCTOU）
+    let dup_key = (
+        mapping.account_id.clone(),
+        mapping.gist_id.clone(),
+        mapping.gist_filename.clone(),
+    );
+    let stored = mapping.clone();
+    let stored_path = mapping.local_path.clone();
+    let outcome = state
         .config
-        .update(|c| c.mappings.push(mapping.clone()))
+        .try_update::<_, String>(move |c| {
+            if c
+                .mappings
+                .iter()
+                .any(|m| m.local_path.eq_ignore_ascii_case(&stored_path))
+            {
+                return Err("该本地文件已被其他映射使用".into());
+            }
+            if c.mappings.iter().any(|m| {
+                (m.account_id.clone(), m.gist_id.clone(), m.gist_filename.clone()) == dup_key
+            }) {
+                return Err("该账号下相同 gist 的相同文件已有映射".into());
+            }
+            c.mappings.push(stored);
+            Ok(())
+        })
         .map_err(|e| e.to_string())?;
+    outcome?;
     if mapping.enabled {
         state.engine.apply_watch_set().map_err(|e| e.to_string())?;
     }
@@ -313,22 +349,33 @@ pub fn mapping_update(
     input: MappingInput,
 ) -> Result<(), String> {
     let (local_path, gist_filename) = validate_mapping(&state, &input, Some(&id))?;
+    let dup_key = (input.account_id.clone(), input.gist_id.trim().to_string(), gist_filename.clone());
     let mut rebuild = false;
-    state
+    let outcome = state
         .config
-        .update(|c| {
-            if let Some(m) = c.mappings.iter_mut().find(|m| m.id == id) {
-                rebuild = m.local_path != local_path || m.enabled != input.enabled;
-                m.local_path = local_path;
-                m.account_id = input.account_id;
-                m.gist_id = input.gist_id.trim().to_string();
-                m.gist_filename = gist_filename;
-                m.upload_enabled = input.upload_enabled;
-                m.download_enabled = input.download_enabled;
-                m.enabled = input.enabled;
+        .try_update::<_, String>(|c| {
+            if c.mappings.iter().any(|other| {
+                other.id != id
+                    && (other.local_path.eq_ignore_ascii_case(&local_path)
+                        || (other.account_id.clone(), other.gist_id.clone(), other.gist_filename.clone()) == dup_key)
+            }) {
+                return Err("与其他映射冲突（本地文件或 gist 文件重复）".into());
             }
+            let Some(m) = c.mappings.iter_mut().find(|m| m.id == id) else {
+                return Err("映射不存在".into());
+            };
+            rebuild = m.local_path != local_path || m.enabled != input.enabled;
+            m.local_path = local_path;
+            m.account_id = input.account_id;
+            m.gist_id = input.gist_id.trim().to_string();
+            m.gist_filename = gist_filename;
+            m.upload_enabled = input.upload_enabled;
+            m.download_enabled = input.download_enabled;
+            m.enabled = input.enabled;
+            Ok(())
         })
         .map_err(|e| e.to_string())?;
+    outcome?;
     if rebuild {
         state.engine.apply_watch_set().map_err(|e| e.to_string())?;
     }
@@ -347,7 +394,11 @@ pub fn mapping_delete(state: State<'_, AppState>, id: String) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub fn mapping_set_enabled(state: State<'_, AppState>, id: String, enabled: bool) -> Result<(), String> {
+pub async fn mapping_set_enabled(
+    state: State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
     state
         .config
         .update(|c| {
@@ -357,6 +408,10 @@ pub fn mapping_set_enabled(state: State<'_, AppState>, id: String, enabled: bool
         })
         .map_err(|e| e.to_string())?;
     state.engine.apply_watch_set().map_err(|e| e.to_string())?;
+    if enabled {
+        // 重开开关：立即跑一轮 Poll，补偿关闭期间错过的远端变更
+        let _ = state.engine.run_one(&id, Trigger::Poll).await;
+    }
     Ok(())
 }
 
@@ -514,5 +569,31 @@ impl AppState {
     /// 引擎持有的 provider 缓存（账号 token/实例变更后失效）
     fn ctx_providers(&self) -> &ProviderCache {
         &self.engine.ctx.providers
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 终审修复 #1：正斜杠手填路径归一为反斜杠，watcher 才能匹配 notify 事件
+    #[test]
+    fn normalize_stored_path_unifies_separators() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("notes.md");
+        std::fs::write(&file, "x").unwrap();
+        let raw = file.to_string_lossy().replace('\\', "/");
+        let normalized = normalize_stored_path(&raw);
+        assert!(normalized.contains('\\'), "应统一为反斜杠: {normalized}");
+        assert!(!normalized.contains("\\\\?\\"), "不应保留 verbatim 前缀: {normalized}");
+        assert!(normalize_stored_path(&normalized).eq_ignore_ascii_case(&normalized), "幂等");
+    }
+
+    #[test]
+    fn normalize_stored_path_missing_file_falls_back_to_separator_fix() {
+        assert_eq!(
+            normalize_stored_path("D:/ghost dir/f.md"),
+            "D:\\ghost dir\\f.md"
+        );
     }
 }

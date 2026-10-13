@@ -47,7 +47,8 @@
     "forceDelete": "强制删除",
     "keepToken": "留空表示保留原令牌",
     "github": "GitHub Gist",
-    "opengist": "Opengist"
+    "opengist": "Opengist",
+    "forceDeleteConfirm": "该账号还有 {{count}} 条同步映射；强制删除将一并删除映射与其快照。"
   },
   "mappings": {
     "localPath": "本地文件",
@@ -79,7 +80,8 @@
     "lastSynced": "最后同步",
     "globalPause": "全局暂停",
     "file": "文件",
-    "gist": "Gist"
+    "gist": "Gist",
+    "recover": "恢复"
   },
   "conflict": {
     "title": "解决冲突",

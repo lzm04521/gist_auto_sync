@@ -103,6 +103,25 @@ pub(crate) async fn check_response(resp: reqwest::Response) -> Result<reqwest::R
     if status.is_success() {
         return Ok(resp);
     }
+    // GitHub primary rate limit 是 403 + X-RateLimit-Remaining: 0（spec §3.2/§6.6）
+    if status.as_u16() == 403 {
+        let remaining = resp
+            .headers()
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok());
+        if remaining == Some("0") {
+            let reset = resp
+                .headers()
+                .get("x-ratelimit-reset")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<i64>().ok());
+            let retry_after = reset.map(|epoch| {
+                let now = chrono::Utc::now().timestamp();
+                Duration::from_secs((epoch - now).max(0) as u64)
+            });
+            return Err(ProviderError::RateLimited { retry_after });
+        }
+    }
     let retry_after = resp
         .headers()
         .get("retry-after")
