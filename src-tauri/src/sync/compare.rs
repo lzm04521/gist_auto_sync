@@ -2,12 +2,18 @@ use sha2::{Digest, Sha256};
 
 /// 行尾规范化：CRLF → LF（spec §6.5，比较基准统一）
 pub fn normalize(s: &str) -> String {
-    todo!()
+    s.replace("\r\n", "\n")
 }
 
 /// SHA-256 十六进制
 pub fn sha256_hex(s: &str) -> String {
-    todo!()
+    let digest = Sha256::digest(s.as_bytes());
+    let mut out = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 /// 三方比较输入。方向开关不在此处：它只决定 Upload/Download 是否执行，不豁免冲突（spec 约束）。
@@ -44,7 +50,36 @@ pub enum Decision {
 /// 5. snapshot 存在：local==snap && remote==snap → Noop；local≠snap && remote==snap → Upload；
 ///    local==snap && remote≠snap → Download；双方都 ≠ snap → Conflict
 pub fn decide(input: &CompareInput) -> Decision {
-    todo!()
+    let local = if input.local_exists {
+        input.local_hash.as_deref()
+    } else {
+        return Decision::MissingLocal;
+    };
+    let snapshot = input.snapshot_hash.as_deref();
+    let remote = if input.remote_file_exists {
+        input.remote_hash.as_deref()
+    } else {
+        return match snapshot {
+            Some(_) => Decision::MissingRemote,
+            None => Decision::Upload,
+        };
+    };
+
+    match (snapshot, local, remote) {
+        (None, l, r) => {
+            if l == r {
+                Decision::SeedSnapshot
+            } else {
+                Decision::Conflict
+            }
+        }
+        (Some(snap), l, r) => match (l == Some(snap), r == Some(snap)) {
+            (true, true) => Decision::Noop,
+            (false, true) => Decision::Upload,
+            (true, false) => Decision::Download,
+            (false, false) => Decision::Conflict,
+        },
+    }
 }
 
 #[cfg(test)]
