@@ -88,5 +88,18 @@
     "remote": "Remote",
     "useLocal": "Overwrite remote with local",
     "useRemote": "Overwrite local with remote"
+  },
+  "settings": {
+    "debounce": "Debounce (seconds)",
+    "debounceExtra": "Wait this long after a local change before uploading; resets on further changes",
+    "poll": "Poll interval (minutes)",
+    "pollExtra": "Check remote gists for changes and download",
+    "autoStart": "Launch at startup",
+    "logLevel": "Log level",
+    "openLogDir": "Open log directory",
+    "language": "Language",
+    "saved": "Settings saved",
+    "debounceRange": "Debounce must be 1-3600 seconds",
+    "pollRange": "Poll interval must be 1-1440 minutes"
   }
 }

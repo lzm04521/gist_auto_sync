@@ -88,5 +88,18 @@
     "remote": "远端",
     "useLocal": "用本地覆盖远端",
     "useRemote": "用远端覆盖本地"
+  },
+  "settings": {
+    "debounce": "防抖秒数",
+    "debounceExtra": "检测到文件变动后等待的秒数，期间再次变动会重新计时",
+    "poll": "轮询间隔（分钟）",
+    "pollExtra": "定时检查远端 gist 变更并下载",
+    "autoStart": "开机自启动",
+    "logLevel": "日志级别",
+    "openLogDir": "打开日志目录",
+    "language": "界面语言",
+    "saved": "设置已保存",
+    "debounceRange": "防抖秒数须在 1~3600 之间",
+    "pollRange": "轮询间隔须在 1~1440 分钟之间"
   }
 }
