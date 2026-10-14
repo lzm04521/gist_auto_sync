@@ -1,0 +1,49 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Rust 构建产物
+src-tauri/target/
+
+# Tauri 生成
+src-tauri/gen/
+
+# Node
+node_modules/
+
+# SDD scratch（进度账本，本地用）
+.superpowers/
+
+# OS
+.DS_Store
+Thumbs.db
+
+docs/*
+doc/*
+handoff/*
+.playwright-mcp/*
+
+AGENTS.md
+CLAUDE.md
+paseo.json
+codegraph.json

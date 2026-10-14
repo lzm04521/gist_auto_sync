@@ -1,0 +1,107 @@
+{
+  "app": {
+    "title": "Gist Auto Sync"
+  },
+  "menu": {
+    "dashboard": "Dashboard",
+    "mappings": "Mappings",
+    "accounts": "Accounts",
+    "settings": "Settings"
+  },
+  "common": {
+    "ok": "OK",
+    "cancel": "Cancel",
+    "save": "Save",
+    "create": "New",
+    "edit": "Edit",
+    "delete": "Delete",
+    "retry": "Retry",
+    "loading": "Loading…",
+    "empty": "No data"
+  },
+  "status": {
+    "idle": "Idle",
+    "uploading": "Uploading",
+    "downloading": "Downloading",
+    "conflict": "Conflict",
+    "error": "Error",
+    "missing": "Missing",
+    "paused": "Paused"
+  },
+  "accounts": {
+    "name": "Name",
+    "provider": "Type",
+    "baseUrl": "Instance URL",
+    "token": "Access token",
+    "tokenHint": "GitHub: Settings → Developer settings → Personal access tokens (classic, gist scope); Opengist: Settings → Access Tokens",
+    "nameRequired": "Name is required",
+    "baseUrlRequired": "Opengist instance URL is required",
+    "tokenRequired": "Access token is required",
+    "create": "New account",
+    "edit": "Edit account",
+    "testConnection": "Test connection",
+    "testOk": "Connected: {{login}}",
+    "testFailed": "Connection failed",
+    "delete": "Delete",
+    "deleteConfirm": "Delete this account?",
+    "forceDelete": "Force delete",
+    "keepToken": "Leave empty to keep current token",
+    "github": "GitHub Gist",
+    "opengist": "Opengist",
+    "forceDeleteConfirm": "This account still has {{count}} mappings; force delete removes them together with their snapshots."
+  },
+  "mappings": {
+    "localPath": "Local file",
+    "chooseFile": "Choose file",
+    "account": "Account",
+    "gist": "Gist",
+    "gistSelect": "From list",
+    "gistManual": "Enter ID",
+    "gistFilename": "Filename in gist",
+    "gistFilenameHint": "Defaults to the local filename",
+    "upload": "Local → Remote",
+    "download": "Remote → Local",
+    "direction": "Direction",
+    "localPathRequired": "Choose or type a local file path",
+    "accountRequired": "Choose an account",
+    "gistIdRequired": "Choose or type a gist",
+    "create": "New mapping",
+    "edit": "Edit mapping",
+    "loadingGists": "Loading gists…",
+    "uploadEnabled": "Upload",
+    "downloadEnabled": "Download"
+  },
+  "dashboard": {
+    "uploadNow": "Upload now",
+    "downloadNow": "Download now",
+    "pause": "Pause",
+    "resume": "Enable",
+    "resolve": "Resolve conflict",
+    "lastSynced": "Last synced",
+    "globalPause": "Pause all",
+    "file": "File",
+    "gist": "Gist",
+    "recover": "Recover"
+  },
+  "conflict": {
+    "title": "Resolve conflict",
+    "desc": "Both local and remote have unsynced changes. Pick a side to keep (the overwritten side is archived to history)",
+    "local": "Local",
+    "remote": "Remote",
+    "useLocal": "Overwrite remote with local",
+    "useRemote": "Overwrite local with remote"
+  },
+  "settings": {
+    "debounce": "Debounce (seconds)",
+    "debounceExtra": "Wait this long after a local change before uploading; resets on further changes",
+    "poll": "Poll interval (minutes)",
+    "pollExtra": "Check remote gists for changes and download",
+    "autoStart": "Launch at startup",
+    "logLevel": "Log level",
+    "openLogDir": "Open log directory",
+    "language": "Language",
+    "saved": "Settings saved",
+    "debounceRange": "Debounce must be 1-3600 seconds",
+    "pollRange": "Poll interval must be 1-1440 minutes"
+  }
+}

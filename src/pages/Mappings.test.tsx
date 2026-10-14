@@ -1,0 +1,174 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { App as AntApp } from "antd";
+import "../i18n";
+
+const mocks = vi.hoisted(() => ({
+  mappingList: vi.fn(),
+  mappingCreate: vi.fn(),
+  mappingUpdate: vi.fn(),
+  mappingDelete: vi.fn(),
+  accountList: vi.fn(),
+  gistListForAccount: vi.fn(),
+  dialogOpen: vi.fn(),
+}));
+
+vi.mock("../api/ipc", () => mocks);
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.dialogOpen }));
+
+import Mappings from "./Mappings";
+
+const account = {
+  id: "acc1",
+  name: "个人 GitHub",
+  provider: "github" as const,
+  baseUrl: "https://api.github.com",
+  tokenRef: "r",
+};
+
+const mappingView = {
+  mapping: {
+    id: "m1",
+    localPath: "C:/notes/todo.md",
+    accountId: "acc1",
+    gistId: "abc123",
+    gistFilename: "todo.md",
+    uploadEnabled: true,
+    downloadEnabled: false,
+    enabled: true,
+  },
+  status: "idle" as const,
+  message: null,
+  lastSyncedAt: null,
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.accountList.mockResolvedValue([account]);
+  mocks.mappingList.mockResolvedValue([mappingView]);
+});
+
+const openCreate = async () => {
+  await userEvent.click(await screen.findByRole("button", { name: /新建映射/ }));
+};
+
+describe("Mappings page", () => {
+  it("渲染映射列表：文件路径、gist id、方向开关状态", async () => {
+    render(
+      <AntApp>
+        <Mappings />
+      </AntApp>,
+    );
+    expect(await screen.findByText("C:/notes/todo.md")).toBeInTheDocument();
+    // 路径与 gist 渲染在同一单元格，文本被拆分，用 span 级正则匹配
+    expect(screen.getByText(/abc123 \/ todo\.md/, { selector: "span" })).toBeInTheDocument();
+  });
+
+  it("选择文件后 gistFilename 默认联动为文件名", async () => {
+    mocks.dialogOpen.mockResolvedValue("C:/notes/todo.md");
+    render(
+      <AntApp>
+        <Mappings />
+      </AntApp>,
+    );
+    await openCreate();
+    await userEvent.click(await screen.findByRole("button", { name: /选择文件/ }));
+    const filenameInput = await screen.findByLabelText(/Gist 内文件名/);
+    await waitFor(() => expect((filenameInput as HTMLInputElement).value).toBe("todo.md"));
+  });
+
+  it("选择账号后加载 gist 下拉，选项显示描述", async () => {
+    mocks.gistListForAccount.mockResolvedValue([
+      { id: "abc123", description: "工作笔记", updatedAt: "2026-10-13T08:00:00Z", files: ["todo.md"] },
+    ]);
+    render(
+      <AntApp>
+        <Mappings />
+      </AntApp>,
+    );
+    await openCreate();
+    const accountSelect = await screen.findByLabelText(/账号/);
+    await userEvent.click(accountSelect);
+    await userEvent.click(await screen.findByText(/个人 GitHub/, { selector: ".ant-select-item-option-content" }));
+
+    await waitFor(() => expect(mocks.gistListForAccount).toHaveBeenCalledWith("acc1"));
+    const gistSelect = await screen.findByLabelText(/Gist\b|^Gist$/i, { selector: "#gistId, [id=gistId], .ant-select" });
+    void gistSelect;
+    // 通过下拉验证描述渲染
+    await userEvent.click(screen.getByRole("combobox", { name: /gist/i }));
+    expect(await screen.findByText(/工作笔记/, { selector: ".ant-select-item-option-content" })).toBeInTheDocument();
+  });
+
+  it("提交载荷 camelCase 且含方向开关", async () => {
+    mocks.dialogOpen.mockResolvedValue("C:/notes/todo.md");
+    mocks.gistListForAccount.mockResolvedValue([
+      { id: "abc123", description: "工作笔记", updatedAt: "2026-10-13T08:00:00Z", files: ["todo.md"] },
+    ]);
+    mocks.mappingCreate.mockResolvedValue(mappingView.mapping);
+    render(
+      <AntApp>
+        <Mappings />
+      </AntApp>,
+    );
+    await openCreate();
+    await userEvent.click(await screen.findByRole("button", { name: /选择文件/ }));
+
+    const accountSelect = await screen.findByLabelText(/账号/);
+    await userEvent.click(accountSelect);
+    await userEvent.click(await screen.findByText(/个人 GitHub/, { selector: ".ant-select-item-option-content" }));
+
+    await userEvent.click(screen.getByRole("combobox", { name: /gist/i }));
+    await userEvent.click(await screen.findByText(/工作笔记/, { selector: ".ant-select-item-option-content" }));
+
+    // 关掉下载开关（默认开）
+    await userEvent.click(screen.getByRole("switch", { name: /远端 → 本地|下载/ }));
+
+    await userEvent.click(screen.getByRole("button", { name: /^OK$|^确\s*定$/ }));
+    await waitFor(() => expect(mocks.mappingCreate).toHaveBeenCalledTimes(1));
+    expect(mocks.mappingCreate).toHaveBeenCalledWith({
+      localPath: "C:/notes/todo.md",
+      accountId: "acc1",
+      gistId: "abc123",
+      gistFilename: "todo.md",
+      uploadEnabled: true,
+      downloadEnabled: false,
+      enabled: true,
+    });
+  });
+
+  it("空路径提交被前端拦截，不调用后端", async () => {
+    render(
+      <AntApp>
+        <Mappings />
+      </AntApp>,
+    );
+    await openCreate();
+    await userEvent.click(await screen.findByRole("button", { name: /^OK$|^确\s*定$/ }));
+    // 校验提示出现且未提交
+    expect(await screen.findByText(/请选择或输入本地文件路径/)).toBeInTheDocument();
+    expect(mocks.mappingCreate).not.toHaveBeenCalled();
+  });
+
+  it("后端唯一性错误展示给用户", async () => {
+    mocks.dialogOpen.mockResolvedValue("C:/notes/todo.md");
+    mocks.gistListForAccount.mockResolvedValue([
+      { id: "abc123", description: "工作笔记", updatedAt: "2026-10-13T08:00:00Z", files: ["todo.md"] },
+    ]);
+    mocks.mappingCreate.mockRejectedValue(new Error("该本地文件已被其他映射使用"));
+    render(
+      <AntApp>
+        <Mappings />
+      </AntApp>,
+    );
+    await openCreate();
+    await userEvent.click(await screen.findByRole("button", { name: /选择文件/ }));
+    const accountSelect = await screen.findByLabelText(/账号/);
+    await userEvent.click(accountSelect);
+    await userEvent.click(await screen.findByText(/个人 GitHub/, { selector: ".ant-select-item-option-content" }));
+    await userEvent.click(screen.getByRole("combobox", { name: /gist/i }));
+    await userEvent.click(await screen.findByText(/工作笔记/, { selector: ".ant-select-item-option-content" }));
+    await userEvent.click(screen.getByRole("button", { name: /^OK$|^确\s*定$/ }));
+    expect(await screen.findByText(/该本地文件已被其他映射使用/)).toBeInTheDocument();
+  });
+});

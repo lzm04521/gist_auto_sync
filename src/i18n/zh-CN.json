@@ -1,0 +1,107 @@
+{
+  "app": {
+    "title": "Gist Auto Sync"
+  },
+  "menu": {
+    "dashboard": "仪表盘",
+    "mappings": "同步映射",
+    "accounts": "账号",
+    "settings": "设置"
+  },
+  "common": {
+    "ok": "确定",
+    "cancel": "取消",
+    "save": "保存",
+    "create": "新建",
+    "edit": "编辑",
+    "delete": "删除",
+    "retry": "重试",
+    "loading": "加载中…",
+    "empty": "暂无数据"
+  },
+  "status": {
+    "idle": "正常",
+    "uploading": "上传中",
+    "downloading": "下载中",
+    "conflict": "冲突",
+    "error": "错误",
+    "missing": "文件缺失",
+    "paused": "已暂停"
+  },
+  "accounts": {
+    "name": "名称",
+    "provider": "类型",
+    "baseUrl": "实例地址",
+    "token": "访问令牌",
+    "tokenHint": "GitHub：Settings → Developer settings → Personal access tokens（classic，勾选 gist）；Opengist：设置 → Access Tokens",
+    "nameRequired": "请输入名称",
+    "baseUrlRequired": "请输入 Opengist 实例地址",
+    "tokenRequired": "请输入访问令牌",
+    "create": "新建账号",
+    "edit": "编辑账号",
+    "testConnection": "测试连接",
+    "testOk": "连接成功：{{login}}",
+    "testFailed": "连接失败",
+    "delete": "删除",
+    "deleteConfirm": "确定删除该账号？",
+    "forceDelete": "强制删除",
+    "keepToken": "留空表示保留原令牌",
+    "github": "GitHub Gist",
+    "opengist": "Opengist",
+    "forceDeleteConfirm": "该账号还有 {{count}} 条同步映射；强制删除将一并删除映射与其快照。"
+  },
+  "mappings": {
+    "localPath": "本地文件",
+    "chooseFile": "选择文件",
+    "account": "账号",
+    "gist": "Gist",
+    "gistSelect": "下拉选择",
+    "gistManual": "手动输入 ID",
+    "gistFilename": "Gist 内文件名",
+    "gistFilenameHint": "默认与本地文件名相同",
+    "upload": "本地 → 远端",
+    "download": "远端 → 本地",
+    "direction": "同步方向",
+    "localPathRequired": "请选择或输入本地文件路径",
+    "accountRequired": "请选择账号",
+    "gistIdRequired": "请选择或输入 gist",
+    "create": "新建映射",
+    "edit": "编辑映射",
+    "loadingGists": "加载 gists…",
+    "uploadEnabled": "上传",
+    "downloadEnabled": "下载"
+  },
+  "dashboard": {
+    "uploadNow": "立即上传",
+    "downloadNow": "立即下载",
+    "pause": "暂停",
+    "resume": "启用",
+    "resolve": "解决冲突",
+    "lastSynced": "最后同步",
+    "globalPause": "全局暂停",
+    "file": "文件",
+    "gist": "Gist",
+    "recover": "恢复"
+  },
+  "conflict": {
+    "title": "解决冲突",
+    "desc": "本地与远端都有未同步的修改，请选择保留哪一边（被覆盖一侧的旧内容会自动存入历史）",
+    "local": "本地",
+    "remote": "远端",
+    "useLocal": "用本地覆盖远端",
+    "useRemote": "用远端覆盖本地"
+  },
+  "settings": {
+    "debounce": "防抖秒数",
+    "debounceExtra": "检测到文件变动后等待的秒数，期间再次变动会重新计时",
+    "poll": "轮询间隔（分钟）",
+    "pollExtra": "定时检查远端 gist 变更并下载",
+    "autoStart": "开机自启动",
+    "logLevel": "日志级别",
+    "openLogDir": "打开日志目录",
+    "language": "界面语言",
+    "saved": "设置已保存",
+    "debounceRange": "防抖秒数须在 1~3600 之间",
+    "pollRange": "轮询间隔须在 1~1440 分钟之间"
+  }
+}
