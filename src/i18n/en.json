@@ -116,6 +116,49 @@
     "WATCH_SET_FAILED": "Failed to update file watching: {{detail}}",
     "LOG_DIR_OPEN_FAILED": "Failed to open log directory: {{detail}}"
   },
+  "statusMsg": {
+    "local": {
+      "read_failed": "Failed to read local file: {{detail}}",
+      "missing": "Local file does not exist or has been deleted"
+    },
+    "remote": {
+      "missing": "This file no longer exists in the remote gist"
+    },
+    "account": {
+      "not_found": "Account not found"
+    },
+    "mapping": {
+      "not_found": "Mapping not found"
+    },
+    "provider": {
+      "build_failed": "Failed to connect to gist service: {{detail}}",
+      "get_failed": "Failed to read gist: {{detail}}"
+    },
+    "manual": {
+      "local_missing": "Local file does not exist",
+      "local_unchanged": "No unsynced local changes",
+      "remote_missing": "File does not exist on the remote",
+      "remote_unchanged": "No remote changes"
+    },
+    "snapshot": {
+      "save_failed": "Failed to save snapshot: {{detail}}"
+    },
+    "baseline": {
+      "created": "Sync baseline established"
+    },
+    "conflict": {
+      "dual_change": "Both local and remote have unsynced changes; pick a side to keep"
+    },
+    "upload": {
+      "skipped_disabled": "Upload is disabled; skipped",
+      "verify_failed": "Upload read-back verification failed: {{detail}}",
+      "failed": "Upload failed: {{detail}}"
+    },
+    "download": {
+      "skipped_disabled": "Download is disabled; skipped",
+      "write_failed": "Failed to write local file: {{detail}}"
+    }
+  },
   "settings": {
     "debounce": "Debounce (seconds)",
     "debounceExtra": "Wait this long after a local change before uploading; resets on further changes",

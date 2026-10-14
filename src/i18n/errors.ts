@@ -16,3 +16,24 @@ export function ipcErrorMessage(e: unknown, t: TFunction): string {
   }
   return String(e);
 }
+
+/**
+ * 引擎状态消息（状态列 Tooltip）的展示文案：后端存 `{"code":"...","detail":"..."}`
+ * JSON 串，按 code 走 i18n（statusMsg.<code>，detail 进插值）；非 JSON 原样返回。
+ */
+export function statusMessageText(msg: string | null, t: TFunction): string | undefined {
+  if (!msg) return undefined;
+  const jsonPart = msg.match(/\{[\s\S]*\}/)?.[0];
+  if (jsonPart) {
+    try {
+      const parsed = JSON.parse(jsonPart) as { code?: unknown; detail?: unknown };
+      if (parsed && typeof parsed.code === "string") {
+        const detail = typeof parsed.detail === "string" ? parsed.detail : msg;
+        return t(`statusMsg.${parsed.code}`, { defaultValue: detail, detail });
+      }
+    } catch {
+      // 非 JSON：按原文
+    }
+  }
+  return msg;
+}

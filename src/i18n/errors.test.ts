@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import i18n from "./index";
-import { ipcErrorMessage } from "./errors";
+import { ipcErrorMessage, statusMessageText } from "./errors";
 import { IpcError } from "../api/ipc";
 
 const t = i18n.t.bind(i18n);
@@ -33,5 +33,31 @@ describe("ipcErrorMessage", () => {
   it("非结构化错误显示字符串形式", () => {
     expect(ipcErrorMessage(new Error("boom"), t)).toContain("boom");
     expect(ipcErrorMessage("plain text", t)).toBe("plain text");
+  });
+});
+
+describe("statusMessageText", () => {
+  it("结构化状态消息按 code 取 i18n 文案", () => {
+    const raw = JSON.stringify({
+      code: "conflict.dual_change",
+      detail: "本地与远端均有未同步修改，请人工选择保留哪边",
+    });
+    expect(statusMessageText(raw, t)).toBe(i18n.t("statusMsg.conflict.dual_change"));
+  });
+
+  it("带插值的消息合并 detail", () => {
+    const raw = JSON.stringify({ code: "upload.failed", detail: "网络超时" });
+    expect(statusMessageText(raw, t)).toContain("网络超时");
+  });
+
+  it("未知 code 与非 JSON 消息回退原文", () => {
+    expect(statusMessageText(JSON.stringify({ code: "some.new_code", detail: "新消息" }), t)).toBe(
+      "新消息",
+    );
+    expect(statusMessageText("普通文本消息", t)).toBe("普通文本消息");
+  });
+
+  it("空消息返回 undefined（Tooltip 不显示）", () => {
+    expect(statusMessageText(null, t)).toBeUndefined();
   });
 });

@@ -10,7 +10,7 @@ import {
   syncManual,
   syncSetPaused,
 } from "../api/ipc";
-import { ipcErrorMessage } from "../i18n/errors";
+import { ipcErrorMessage, statusMessageText } from "../i18n/errors";
 import type { MappingStatus, MappingView } from "../types";
 import ConflictDialog from "../components/ConflictDialog";
 
@@ -136,7 +136,7 @@ export default function Dashboard() {
             dataIndex: "status",
             width: 110,
             render: (_, v) => (
-              <Tooltip title={v.message}>
+              <Tooltip title={statusMessageText(v.message, t)}>
                 <Tag color={statusColor(v.status)}>{t(`status.${v.status}`)}</Tag>
               </Tooltip>
             ),

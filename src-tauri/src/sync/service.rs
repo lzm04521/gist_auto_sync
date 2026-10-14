@@ -249,7 +249,7 @@ impl Engine {
             self.record_status(
                 mapping_id,
                 MappingStatus::Error,
-                Some("映射不存在".into()),
+                crate::sync::engine::status_msg("mapping.not_found", "映射不存在"),
             );
             return MappingStatus::Error;
         };
