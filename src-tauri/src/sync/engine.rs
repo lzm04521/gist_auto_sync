@@ -35,7 +35,20 @@ pub enum MappingStatus {
     Conflict,
     Error,
     Missing,
-    Paused,
+}
+
+/// 单次循环结果：最终状态 + 最终态消息（随状态持久化）+ 限流重试提示
+#[derive(Debug, Clone)]
+pub struct CycleOutcome {
+    pub status: MappingStatus,
+    pub message: Option<String>,
+    pub rate_hint: Option<Duration>,
+}
+
+impl CycleOutcome {
+    fn plain(status: MappingStatus) -> Self {
+        Self { status, message: None, rate_hint: None }
+    }
 }
 
 /// 推送给 UI 的状态事件（T12 转成 Tauri event）
@@ -114,15 +127,15 @@ pub struct SyncCtx {
 
 /// 单次同步循环（spec §6.1/6.2/6.5）。返回最终状态；过程经 sink 推送。
 pub async fn run_sync_cycle(ctx: &SyncCtx, mapping: &Mapping, trigger: Trigger) -> MappingStatus {
-    run_sync_cycle_with_hint(ctx, mapping, trigger).await.0
+    run_sync_cycle_with_hint(ctx, mapping, trigger).await.status
 }
 
-/// 同 run_sync_cycle，额外返回限流重试提示（RateLimited.retry_after）
+/// 同 run_sync_cycle，额外返回最终态消息与限流重试提示（RateLimited.retry_after）
 pub async fn run_sync_cycle_with_hint(
     ctx: &SyncCtx,
     mapping: &Mapping,
     trigger: Trigger,
-) -> (MappingStatus, Option<Duration>) {
+) -> CycleOutcome {
     let (local_raw, local_mtime) = match std::fs::read_to_string(&mapping.local_path) {
         Ok(text) => {
             let mtime = std::fs::metadata(&mapping.local_path)
@@ -132,8 +145,12 @@ pub async fn run_sync_cycle_with_hint(
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, None),
         Err(e) => {
-            return (
-                emit_status(ctx, mapping, MappingStatus::Error, Some(format!("读取本地文件失败: {e}")), false),
+            return emit_outcome(
+                ctx,
+                mapping,
+                MappingStatus::Error,
+                status_msg("local.read_failed", format!("读取本地文件失败: {e}")),
+                false,
                 None,
             );
         }
@@ -145,7 +162,7 @@ pub async fn run_sync_cycle_with_hint(
         && let (Some(h), Some(m)) = (&local_hash, local_mtime)
         && ctx.guard.should_suppress(&mapping.id, h, m)
     {
-        return (MappingStatus::Idle, None);
+        return CycleOutcome::plain(MappingStatus::Idle);
     }
 
     // ── provider 解析
@@ -156,24 +173,42 @@ pub async fn run_sync_cycle_with_hint(
         .into_iter()
         .find(|a| a.id == mapping.account_id);
     let Some(account) = account else {
-        return (emit_status(ctx, mapping, MappingStatus::Error, Some("账号不存在".into()), false), None);
+        return emit_outcome(
+            ctx,
+            mapping,
+            MappingStatus::Error,
+            status_msg("account.not_found", "账号不存在"),
+            false,
+            None,
+        );
     };
     let provider = match ctx.providers.get_or_build(&account).await {
         Ok(p) => p,
         Err(e) => {
-            return (
-                emit_status(ctx, mapping, MappingStatus::Error, Some(e.to_string()), false),
+            return emit_outcome(
+                ctx,
+                mapping,
+                MappingStatus::Error,
+                status_msg("provider.build_failed", e.to_string()),
+                false,
                 rate_limit_hint(&e),
             )
         }
     };
 
-    // ── 远端读取
-    let detail = match provider.get_gist(&mapping.gist_id).await {
+    // ── 远端读取（只回补目标文件的 content，避免为 gist 内无关文件拉 raw）
+    let detail = match provider
+        .get_gist(&mapping.gist_id, Some(&mapping.gist_filename))
+        .await
+    {
         Ok(d) => d,
         Err(e) => {
-            return (
-                emit_status(ctx, mapping, MappingStatus::Error, Some(e.to_string()), false),
+            return emit_outcome(
+                ctx,
+                mapping,
+                MappingStatus::Error,
+                status_msg("provider.get_failed", e.to_string()),
+                false,
                 rate_limit_hint(&e),
             )
         }
@@ -201,7 +236,14 @@ pub async fn run_sync_cycle_with_hint(
     let decision = match trigger {
         Trigger::ManualUpload => {
             let Some(local) = &local_raw else {
-                return (emit_status(ctx, mapping, MappingStatus::Error, Some("本地文件不存在".into()), false), None);
+                return emit_outcome(
+                    ctx,
+                    mapping,
+                    MappingStatus::Error,
+                    status_msg("manual.local_missing", "本地文件不存在"),
+                    false,
+                    None,
+                );
             };
             let local_changed = snapshot
                 .as_ref()
@@ -210,13 +252,27 @@ pub async fn run_sync_cycle_with_hint(
             let _ = local;
             // 远端文件缺失（被改名/删除）时也放行：ManualUpload = 在远端重建（spec §6.3）
             if !local_changed && remote_file.is_some() {
-                return (emit_status(ctx, mapping, MappingStatus::Idle, Some("本地无未同步修改".into()), false), None);
+                return emit_outcome(
+                    ctx,
+                    mapping,
+                    MappingStatus::Idle,
+                    status_msg("manual.local_unchanged", "本地无未同步修改"),
+                    false,
+                    None,
+                );
             }
             Decision::Upload
         }
         Trigger::ManualDownload => {
             let Some(remote) = &remote_raw else {
-                return (emit_status(ctx, mapping, MappingStatus::Error, Some("远端不存在该文件".into()), false), None);
+                return emit_outcome(
+                    ctx,
+                    mapping,
+                    MappingStatus::Error,
+                    status_msg("manual.remote_missing", "远端不存在该文件"),
+                    false,
+                    None,
+                );
             };
             let remote_changed = snapshot
                 .as_ref()
@@ -225,7 +281,14 @@ pub async fn run_sync_cycle_with_hint(
             let _ = remote;
             // 本地文件缺失（被删除）时也放行：ManualDownload = 恢复本地（spec §6.3）
             if !remote_changed && local_raw.is_some() {
-                return (emit_status(ctx, mapping, MappingStatus::Idle, Some("远端无变更".into()), false), None);
+                return emit_outcome(
+                    ctx,
+                    mapping,
+                    MappingStatus::Idle,
+                    status_msg("manual.remote_unchanged", "远端无变更"),
+                    false,
+                    None,
+                );
             }
             Decision::Download
         }
@@ -234,8 +297,8 @@ pub async fn run_sync_cycle_with_hint(
 
     let is_auto = matches!(trigger, Trigger::LocalSettled | Trigger::Poll);
 
-    let status = match decision {
-        Decision::Noop => MappingStatus::Idle,
+    match decision {
+        Decision::Noop => CycleOutcome::plain(MappingStatus::Idle),
         Decision::SeedSnapshot => {
             let hash = input.local_hash.clone().unwrap_or_default();
             let state = SnapshotState {
@@ -246,26 +309,68 @@ pub async fn run_sync_cycle_with_hint(
             };
             if let Err(e) = ctx.snapshots.save(&mapping.id, &state) {
                 tracing::error!("[{}] 建立同步基准失败: {e}", mapping.id);
-                return (emit_status(ctx, mapping, MappingStatus::Error, Some(format!("保存快照失败: {e}")), false), None);
+                return emit_outcome(
+                    ctx,
+                    mapping,
+                    MappingStatus::Error,
+                    status_msg("snapshot.save_failed", format!("保存快照失败: {e}")),
+                    false,
+                    None,
+                );
             }
             tracing::info!("[{}] 建立同步基准（首次映射两边一致）", mapping.id);
-            emit_status(ctx, mapping, MappingStatus::Idle, Some("已建立同步基准".into()), true)
+            emit_outcome(
+                ctx,
+                mapping,
+                MappingStatus::Idle,
+                status_msg("baseline.created", "已建立同步基准"),
+                true,
+                None,
+            )
         }
         Decision::MissingLocal => {
             tracing::warn!("[{}] 本地文件不存在或已删除，等待人工恢复", mapping.id);
-            emit_status(ctx, mapping, MappingStatus::Missing, Some("本地文件不存在或已删除".into()), false)
+            emit_outcome(
+                ctx,
+                mapping,
+                MappingStatus::Missing,
+                status_msg("local.missing", "本地文件不存在或已删除"),
+                false,
+                None,
+            )
         }
         Decision::MissingRemote => {
             tracing::warn!("[{}] 远端 gist 中不存在该文件，等待人工恢复", mapping.id);
-            emit_status(ctx, mapping, MappingStatus::Missing, Some("远端 gist 中不存在该文件".into()), false)
+            emit_outcome(
+                ctx,
+                mapping,
+                MappingStatus::Missing,
+                status_msg("remote.missing", "远端 gist 中不存在该文件"),
+                false,
+                None,
+            )
         }
         Decision::Conflict => {
             tracing::warn!("[{}] 本地与远端均有未同步修改，已暂停等待人工选择", mapping.id);
-            emit_status(ctx, mapping, MappingStatus::Conflict, Some("本地与远端均有未同步修改，请人工选择保留哪边".into()), false)
+            emit_outcome(
+                ctx,
+                mapping,
+                MappingStatus::Conflict,
+                status_msg("conflict.dual_change", "本地与远端均有未同步修改，请人工选择保留哪边"),
+                false,
+                None,
+            )
         }
         Decision::Upload => {
             if !mapping.upload_enabled && is_auto {
-                return (emit_status(ctx, mapping, MappingStatus::Idle, Some("上传开关已关闭，跳过上传".into()), false), None);
+                return emit_outcome(
+                    ctx,
+                    mapping,
+                    MappingStatus::Idle,
+                    status_msg("upload.skipped_disabled", "上传开关已关闭，跳过上传"),
+                    false,
+                    None,
+                );
             }
             emit_status(ctx, mapping, MappingStatus::Uploading, None, false);
             // 归档旧远端（远端文件不存在时无可归档）
@@ -282,12 +387,52 @@ pub async fn run_sync_cycle_with_hint(
                 .await
             {
                 Ok(new_detail) => {
-                    let back = new_detail
+                    // 回读校验（spec：快照以回读为准）：响应 content 缺失或不一致时再取一次远端核对
+                    let sent_hash = sha256_hex(&content);
+                    let readback_ok = |c: &str| sha256_hex(&normalize(c)) == sent_hash;
+                    let mut verified = new_detail
                         .files
                         .iter()
                         .find(|f| f.filename == mapping.gist_filename)
                         .and_then(|f| f.content.clone())
-                        .unwrap_or(content);
+                        .filter(|c| readback_ok(c));
+                    if verified.is_none() {
+                        tracing::warn!("[{}] 上传响应回读缺失或不一致，重新拉取远端核对", mapping.id);
+                        match provider
+                            .get_gist(&mapping.gist_id, Some(&mapping.gist_filename))
+                            .await
+                        {
+                            Ok(d) => {
+                                verified = d
+                                    .files
+                                    .iter()
+                                    .find(|f| f.filename == mapping.gist_filename)
+                                    .and_then(|f| f.content.clone())
+                                    .filter(|c| readback_ok(c));
+                            }
+                            Err(e) => {
+                                return emit_outcome(
+                                    ctx,
+                                    mapping,
+                                    MappingStatus::Error,
+                                    status_msg("upload.verify_failed", format!("上传回读校验失败: {e}")),
+                                    false,
+                                    rate_limit_hint(&e),
+                                );
+                            }
+                        }
+                    }
+                    let Some(back) = verified else {
+                        tracing::error!("[{}] 上传回读校验失败：远端内容与发送不一致，不落快照", mapping.id);
+                        return emit_outcome(
+                            ctx,
+                            mapping,
+                            MappingStatus::Error,
+                            status_msg("upload.verify_failed", "上传回读校验失败：远端内容与发送不一致"),
+                            false,
+                            None,
+                        );
+                    };
                     let state = SnapshotState {
                         last_synced_hash: sha256_hex(&normalize(&back)),
                         last_synced_at: Utc::now(),
@@ -295,23 +440,41 @@ pub async fn run_sync_cycle_with_hint(
                         remote_updated_at: Some(new_detail.updated_at),
                     };
                     if let Err(e) = ctx.snapshots.save(&mapping.id, &state) {
-                        return (emit_status(ctx, mapping, MappingStatus::Error, Some(format!("保存快照失败: {e}")), false), None);
+                        return emit_outcome(
+                            ctx,
+                            mapping,
+                            MappingStatus::Error,
+                            status_msg("snapshot.save_failed", format!("保存快照失败: {e}")),
+                            false,
+                            None,
+                        );
                     }
                     tracing::info!("[{}] 上传完成", mapping.id);
-                    emit_status(ctx, mapping, MappingStatus::Idle, None, true)
+                    emit_outcome(ctx, mapping, MappingStatus::Idle, None, true, None)
                 }
                 Err(e) => {
                     tracing::error!("[{}] 上传失败: {e}", mapping.id);
-                    return (
-                        emit_status(ctx, mapping, MappingStatus::Error, Some(e.to_string()), false),
+                    emit_outcome(
+                        ctx,
+                        mapping,
+                        MappingStatus::Error,
+                        status_msg("upload.failed", e.to_string()),
+                        false,
                         rate_limit_hint(&e),
-                    );
+                    )
                 }
             }
         }
         Decision::Download => {
             if !mapping.download_enabled && is_auto {
-                return (emit_status(ctx, mapping, MappingStatus::Idle, Some("下载开关已关闭，跳过下载".into()), false), None);
+                return emit_outcome(
+                    ctx,
+                    mapping,
+                    MappingStatus::Idle,
+                    status_msg("download.skipped_disabled", "下载开关已关闭，跳过下载"),
+                    false,
+                    None,
+                );
             }
             emit_status(ctx, mapping, MappingStatus::Downloading, None, false);
             // 归档旧本地
@@ -320,11 +483,35 @@ pub async fn run_sync_cycle_with_hint(
                     .snapshots
                     .archive(&mapping.id, Side::Local, local, &ext_of(&mapping.local_path));
             }
-            // 写盘保留远端原始字节（spec §6.5）
+            // 写盘保留远端原始字节（spec §6.5）；原子替换（temp + rename 同目录同卷），
+            // 写一半失败不会留下截断文件；temp 路径与映射路径不同，watcher 事件天然不命中映射
             let raw = remote_raw.clone().expect("Download 分支必有远端内容");
             tracing::info!("[{}] 下载 gist {}/{} → {}（{} 字节）", mapping.id, mapping.gist_id, mapping.gist_filename, mapping.local_path, raw.len());
-            if let Err(e) = std::fs::write(&mapping.local_path, raw.as_bytes()) {
-                return (emit_status(ctx, mapping, MappingStatus::Error, Some(format!("写入本地文件失败: {e}")), false), None);
+            let local = Path::new(&mapping.local_path);
+            let tmp_path = local.with_file_name(format!(
+                ".{}.gistsync.tmp",
+                local.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+            ));
+            if let Err(e) = std::fs::write(&tmp_path, raw.as_bytes()) {
+                return emit_outcome(
+                    ctx,
+                    mapping,
+                    MappingStatus::Error,
+                    status_msg("download.write_failed", format!("写入本地文件失败: {e}")),
+                    false,
+                    None,
+                );
+            }
+            if let Err(e) = std::fs::rename(&tmp_path, local) {
+                let _ = std::fs::remove_file(&tmp_path);
+                return emit_outcome(
+                    ctx,
+                    mapping,
+                    MappingStatus::Error,
+                    status_msg("download.write_failed", format!("写入本地文件失败: {e}")),
+                    false,
+                    None,
+                );
             }
             let mtime = std::fs::metadata(&mapping.local_path)
                 .ok()
@@ -340,13 +527,19 @@ pub async fn run_sync_cycle_with_hint(
                 remote_updated_at: Some(detail.updated_at),
             };
             if let Err(e) = ctx.snapshots.save(&mapping.id, &state) {
-                return (emit_status(ctx, mapping, MappingStatus::Error, Some(format!("保存快照失败: {e}")), false), None);
+                return emit_outcome(
+                    ctx,
+                    mapping,
+                    MappingStatus::Error,
+                    status_msg("snapshot.save_failed", format!("保存快照失败: {e}")),
+                    false,
+                    None,
+                );
             }
             tracing::info!("[{}] 下载完成", mapping.id);
-            emit_status(ctx, mapping, MappingStatus::Idle, None, true)
+            emit_outcome(ctx, mapping, MappingStatus::Idle, None, true, None)
         }
-    };
-    (status, None)
+    }
 }
 
 /// RateLimited 错误 → 重试等待提示
@@ -374,6 +567,25 @@ fn emit_status(ctx: &SyncCtx, mapping: &Mapping, status: MappingStatus, message:
     status
 }
 
+/// 引擎状态消息的结构化封装：`{"code":"...","detail":"..."}`。
+/// 前端按 code 走 i18n（statusMsg.<code>），detail 为兜底展示（与 IPC 错误同构）。
+pub fn status_msg(code: &str, detail: impl Into<String>) -> Option<String> {
+    Some(serde_json::json!({ "code": code, "detail": detail.into() }).to_string())
+}
+
+/// emit_status 的 CycleOutcome 版本：事件照常推送，最终态 message 一并返回给调用方持久化
+fn emit_outcome(
+    ctx: &SyncCtx,
+    mapping: &Mapping,
+    status: MappingStatus,
+    message: Option<String>,
+    synced: bool,
+    rate_hint: Option<Duration>,
+) -> CycleOutcome {
+    let status = emit_status(ctx, mapping, status, message.clone(), synced);
+    CycleOutcome { status, message, rate_hint }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,6 +597,8 @@ mod tests {
         /// (gist_id, filename, content)
         files: Mutex<Vec<(String, String, String)>>,
         fail_next: Mutex<Option<ProviderError>>,
+        /// 模拟远端回读与发送不一致（服务端篡改/中间层截断）
+        corrupt_update: Mutex<bool>,
         calls: Mutex<Vec<&'static str>>,
     }
 
@@ -393,6 +607,7 @@ mod tests {
             Self {
                 files: Mutex::new(vec![]),
                 fail_next: Mutex::new(None),
+                corrupt_update: Mutex::new(false),
                 calls: Mutex::new(vec![]),
             }
         }
@@ -429,7 +644,11 @@ mod tests {
         async fn list_gists(&self, _since: Option<DateTime<Utc>>) -> Result<Vec<GistSummary>, ProviderError> {
             Ok(vec![])
         }
-        async fn get_gist(&self, gist_id: &str) -> Result<GistDetail, ProviderError> {
+        async fn get_gist(
+            &self,
+            gist_id: &str,
+            _wanted_file: Option<&str>,
+        ) -> Result<GistDetail, ProviderError> {
             self.calls.lock().unwrap().push("get");
             if let Some(e) = self.fail_next.lock().unwrap().take() {
                 return Err(e);
@@ -458,8 +677,13 @@ mod tests {
             if let Some(e) = self.fail_next.lock().unwrap().take() {
                 return Err(e);
             }
-            self.set_file(gist_id, filename, content);
-            self.get_gist(gist_id).await
+            let stored = if *self.corrupt_update.lock().unwrap() {
+                format!("corrupted:{content}")
+            } else {
+                content.to_string()
+            };
+            self.set_file(gist_id, filename, &stored);
+            self.get_gist(gist_id, Some(filename)).await
         }
     }
 
@@ -643,6 +867,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_readback_mismatch_fails_and_keeps_snapshot() {
+        // 远端回读与发送不一致（服务端篡改/截断）：报错、不落快照
+        let f = fixture("local v2", "base", Some("base"));
+        *f.fake.corrupt_update.lock().unwrap() = true;
+        let status = run_sync_cycle(&f.ctx, &f.mapping, Trigger::ManualUpload).await;
+        assert_eq!(status, MappingStatus::Error);
+        assert_eq!(
+            f.ctx.snapshots.load("m1").unwrap().last_synced_hash,
+            sha("base"),
+            "回读校验失败时快照不应推进"
+        );
+        // 二次核对会多打一次 get（初次 update 响应 1 次 + 重拉 1 次）
+        assert!(f.fake.calls() >= 2, "应触发二次拉取核对");
+    }
+
+    #[tokio::test]
+    async fn download_leaves_no_tmp_file() {
+        // 原子写盘：成功后目录里不应残留 .gistsync.tmp 临时文件
+        let f = fixture("base", "remote v2", Some("base"));
+        let status = run_sync_cycle(&f.ctx, &f.mapping, Trigger::Poll).await;
+        assert_eq!(status, MappingStatus::Idle);
+        let parent = f.local_path.parent().unwrap();
+        let leftovers: Vec<String> = fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains("gistsync.tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "不应有临时文件残留: {leftovers:?}");
+    }
+
+    #[tokio::test]
     async fn first_sync_equal_seeds_snapshot_differ_conflicts() {
         let f = fixture("same", "same", None);
         let status = run_sync_cycle(&f.ctx, &f.mapping, Trigger::Poll).await;
@@ -681,9 +937,10 @@ mod tests {
         *f.fake.fail_next.lock().unwrap() = Some(ProviderError::RateLimited {
             retry_after: Some(Duration::from_secs(30)),
         });
-        let (status, hint) = run_sync_cycle_with_hint(&f.ctx, &f.mapping, Trigger::Poll).await;
-        assert_eq!(status, MappingStatus::Error);
-        assert_eq!(hint, Some(Duration::from_secs(30)));
+        let outcome = run_sync_cycle_with_hint(&f.ctx, &f.mapping, Trigger::Poll).await;
+        assert_eq!(outcome.status, MappingStatus::Error);
+        assert_eq!(outcome.rate_hint, Some(Duration::from_secs(30)));
+        assert!(outcome.message.is_some(), "限流错误应携带消息");
     }
 
     #[tokio::test]

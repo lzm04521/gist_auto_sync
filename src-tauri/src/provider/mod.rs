@@ -8,6 +8,10 @@ use crate::model::{Account, ProviderKind};
 pub mod github;
 pub mod opengist;
 
+/// list_gists 分页循环的页数安全上限：异常服务端恒返满页时避免死循环
+/// （100 页 × 100 条 = 1 万条 gist，远超个人用量；达上限即提前停止并 warn）
+pub(crate) const MAX_LIST_PAGES: u32 = 100;
+
 /// 认证用户信息（verify_token 返回）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -149,8 +153,13 @@ pub trait GistProvider: Send + Sync {
     async fn verify_token(&self) -> Result<UserInfo, ProviderError>;
     /// 列当前用户 gists；since 用于轮询增量过滤
     async fn list_gists(&self, since: Option<DateTime<Utc>>) -> Result<Vec<GistSummary>, ProviderError>;
-    /// 取 gist 详情（含全部文件；目标文件 content 缺失时由实现回退拉 raw）
-    async fn get_gist(&self, gist_id: &str) -> Result<GistDetail, ProviderError>;
+    /// 取 gist 详情（含全部文件）。`wanted_file`：引擎关心的目标文件——
+    /// content 缺失时只回补该文件的 raw（避免为无关文件放大流量）；None 表示全部回补。
+    async fn get_gist(
+        &self,
+        gist_id: &str,
+        wanted_file: Option<&str>,
+    ) -> Result<GistDetail, ProviderError>;
     /// 更新 gist 内单个文件（PATCH 只带该文件一个 key）；文件不存在则新增
     async fn update_file(&self, gist_id: &str, filename: &str, content: &str) -> Result<GistDetail, ProviderError>;
 }

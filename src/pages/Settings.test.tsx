@@ -10,7 +10,11 @@ const mocks = vi.hoisted(() => ({
   appOpenLogDir: vi.fn(),
 }));
 
-vi.mock("../api/ipc", () => mocks);
+vi.mock("../api/ipc", async () => {
+  const actual = await vi.importActual<typeof import("../api/ipc")>("../api/ipc");
+  // 保留 IpcError 等真实导出，仅替换 IPC 函数为 mock
+  return { ...actual, ...mocks };
+});
 
 import Settings from "./Settings";
 

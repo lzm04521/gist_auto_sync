@@ -1,9 +1,18 @@
 use std::io::{self, Write};
 
 /// 把日志文本中疑似 token 的子串打码：
-/// 覆盖 GitHub（ghp_/gho_/ghu_/ghs_/ghr_/github_pat_）与 Opengist（og_）前缀
+/// 覆盖 GitHub（ghp_/gho_/ghu_/ghs_/ghr_/github_pat_）与 Opengist（og_）前缀。
+/// 每项附带 token 段最小长度：`og_` 过短会误伤普通文本（如 dog_food 的中段），
+/// 要求其后 token 段 ≥16 字符才打码；长前缀本身足够特异，1 即可。
 pub fn redact(s: &str) -> String {
-    const PREFIXES: [&str; 6] = ["github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "og_"];
+    const PREFIXES: [(&str, usize); 6] = [
+        ("github_pat_", 1),
+        ("ghp_", 1),
+        ("gho_", 1),
+        ("ghu_", 1),
+        ("ghs_", 1),
+        ("og_", 16),
+    ];
 
     let mut out = String::with_capacity(s.len());
     let bytes = s.as_bytes();
@@ -11,7 +20,7 @@ pub fn redact(s: &str) -> String {
     while i < bytes.len() {
         // 尝试在每个位置匹配 token 前缀
         let mut matched = None;
-        for p in PREFIXES {
+        for (p, _) in PREFIXES {
             if s[i..].starts_with(p) {
                 matched = Some(p);
                 break;
@@ -25,7 +34,17 @@ pub fn redact(s: &str) -> String {
             {
                 j += 1;
             }
-            out.push_str("***");
+            let min = PREFIXES
+                .iter()
+                .find(|(q, _)| *q == p)
+                .map(|(_, m)| *m)
+                .unwrap_or(1);
+            if j - (i + p.len()) >= min {
+                out.push_str("***");
+            } else {
+                // token 段过短：视为普通文本原样输出
+                out.push_str(&s[i..j]);
+            }
             i = j;
         } else {
             // 按字符边界推进（内容为 UTF-8）
@@ -71,8 +90,18 @@ impl<W: Write> Write for RedactingWriter<W> {
     }
 }
 
-/// 初始化按天滚动的文件日志（级别来自全局设置）
-pub fn init_logging(log_dir: &std::path::Path, level: &str) -> Result<(), String> {
+/// 运行时可调日志级别的句柄（设置页热更新用）
+pub type LogReloadHandle = tracing_subscriber::reload::Handle<
+    tracing_subscriber::filter::EnvFilter,
+    tracing_subscriber::Registry,
+>;
+
+/// 初始化按天滚动的文件日志（级别来自全局设置），返回热更新句柄。
+/// EnvFilter 用 reload::Layer 包装：per-layer filter 置于 fmt 层之前，作用域覆盖全部输出。
+pub fn init_logging(log_dir: &std::path::Path, level: &str) -> Result<LogReloadHandle, String> {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
     std::fs::create_dir_all(log_dir).map_err(|e| format!("创建日志目录失败: {e}"))?;
     let file_appender = tracing_appender::rolling::daily(log_dir, "gistsync.log");
     let (writer, guard) = tracing_appender::non_blocking(RedactingWriter::new(file_appender));
@@ -80,12 +109,21 @@ pub fn init_logging(log_dir: &std::path::Path, level: &str) -> Result<(), String
     std::mem::forget(guard);
     let filter = tracing_subscriber::EnvFilter::try_new(level)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(writer)
-        .with_ansi(false)
+    let (filter_layer, handle) = tracing_subscriber::reload::Layer::new(filter);
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(writer))
         .init();
-    Ok(())
+    Ok(handle)
+}
+
+/// 热更新日志级别（settings_update 调用；失败时配置已保存，重启后生效）
+pub fn set_log_level(handle: &LogReloadHandle, level: &str) -> Result<(), String> {
+    let filter = tracing_subscriber::EnvFilter::try_new(level)
+        .map_err(|e| format!("非法日志级别 {level}: {e}"))?;
+    handle
+        .modify(|f| *f = filter)
+        .map_err(|e| format!("更新日志级别失败: {e}"))
 }
 
 /// 安装 panic hook：panic 信息同步直写 panic.log（过 redact），
@@ -133,7 +171,8 @@ mod tests {
             redact("Authorization: Bearer ghp_abc123DEF456xyz tail"),
             "Authorization: Bearer *** tail"
         );
-        assert_eq!(redact("token og_AbCdEf123456"), "token ***");
+        // og_ 要求 token 段 ≥16 字符（20 字符样本）
+        assert_eq!(redact("token og_AbCdEf1234567890ab"), "token ***");
         assert_eq!(
             redact("github_pat_11AAAA0000bbbCCC"),
             "***"
@@ -144,6 +183,15 @@ mod tests {
     fn redact_keeps_normal_text() {
         let normal = "同步完成 notes.md → gist abc123 (200 OK)";
         assert_eq!(redact(normal), normal);
+    }
+
+    #[test]
+    fn redact_og_prefix_requires_token_length() {
+        // og_ 后段过短（普通英文词）不打码
+        assert_eq!(redact("dog_food and log_level"), "dog_food and log_level");
+        // 恰好 16 字符：打码；15 字符：原样
+        assert_eq!(redact("og_abcdefghijklmnop"), "***");
+        assert_eq!(redact("og_abcdefghijklmno"), "og_abcdefghijklmno");
     }
 
     #[test]

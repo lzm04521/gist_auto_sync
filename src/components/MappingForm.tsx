@@ -4,6 +4,7 @@ import { FolderOpenOutlined } from "@ant-design/icons";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { accountList, gistListForAccount, mappingCreate, mappingUpdate } from "../api/ipc";
+import { ipcErrorMessage } from "../i18n/errors";
 import type { Account, GistSummary, Mapping } from "../types";
 
 export interface FormValues {
@@ -41,8 +42,10 @@ export default function MappingForm({ open, editing, onCancel, onSaved }: Props)
   const localPath = Form.useWatch("localPath", form);
 
   useEffect(() => {
-    void accountList().then(setAccounts).catch((e) => void message.error(String(e)));
-  }, [message]);
+    void accountList()
+      .then(setAccounts)
+      .catch((e) => void message.error(ipcErrorMessage(e, t)));
+  }, [message, t]);
 
   // 账号切换 → 拉取 gist 列表
   useEffect(() => {
@@ -56,7 +59,7 @@ export default function MappingForm({ open, editing, onCancel, onSaved }: Props)
       .catch((e) => {
         if (!cancelled) {
           setGists([]);
-          void message.error(`${t("mappings.loadingGists")}: ${String(e)}`);
+          void message.error(`${t("mappings.loadingGists")}: ${ipcErrorMessage(e, t)}`);
         }
       })
       .finally(() => {
@@ -102,7 +105,7 @@ export default function MappingForm({ open, editing, onCancel, onSaved }: Props)
         form.setFieldsValue({ localPath: path });
       }
     } catch (e) {
-      void message.error(String(e));
+      void message.error(ipcErrorMessage(e, t));
     }
   };
 
@@ -126,7 +129,7 @@ export default function MappingForm({ open, editing, onCancel, onSaved }: Props)
       }
       onSaved();
     } catch (e) {
-      void message.error(String(e));
+      void message.error(ipcErrorMessage(e, t));
     }
   };
 

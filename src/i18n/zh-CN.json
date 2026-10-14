@@ -16,6 +16,7 @@
     "edit": "编辑",
     "delete": "删除",
     "retry": "重试",
+    "actions": "操作",
     "loading": "加载中…",
     "empty": "暂无数据"
   },
@@ -25,8 +26,7 @@
     "downloading": "下载中",
     "conflict": "冲突",
     "error": "错误",
-    "missing": "文件缺失",
-    "paused": "已暂停"
+    "missing": "文件缺失"
   },
   "accounts": {
     "name": "名称",
@@ -74,6 +74,7 @@
   "dashboard": {
     "uploadNow": "立即上传",
     "downloadNow": "立即下载",
+    "status": "状态",
     "pause": "暂停",
     "resume": "启用",
     "resolve": "解决冲突",
@@ -90,6 +91,73 @@
     "remote": "远端",
     "useLocal": "用本地覆盖远端",
     "useRemote": "用远端覆盖本地"
+  },
+  "errors": {
+    "ACCOUNT_NOT_FOUND": "账号不存在",
+    "ACCOUNT_BASE_URL_INVALID": "Opengist 实例地址必须以 http(s):// 开头",
+    "ACCOUNT_KEYRING_WRITE": "保存访问令牌失败：{{detail}}",
+    "ACCOUNT_IN_USE": "该账号仍有 {{count}} 条同步映射",
+    "CONFIG_SAVE_FAILED": "配置保存失败：{{detail}}",
+    "MAPPING_NOT_FOUND": "映射不存在",
+    "MAPPING_LOCAL_ABSOLUTE": "本地路径必须是绝对路径",
+    "MAPPING_LOCAL_MISSING": "本地文件不存在",
+    "MAPPING_FILE_NOT_UTF8": "文件不是有效的 UTF-8 文本，目前仅支持文本文件",
+    "MAPPING_FILENAME_INVALID": "无法从路径推导文件名",
+    "MAPPING_LOCAL_DUPLICATE": "该本地文件已被其他映射使用",
+    "MAPPING_TRIPLE_DUPLICATE": "该账号下相同 gist 的相同文件已有映射",
+    "MAPPING_CONFLICT": "与其他映射冲突（本地文件或 gist 文件重复）",
+    "SYNC_DIRECTION_INVALID": "未知的同步方向：{{detail}}",
+    "SETTING_DEBOUNCE_RANGE": "防抖秒数须在 1~3600 之间",
+    "SETTING_POLL_RANGE": "轮询间隔须在 1~1440 分钟之间",
+    "SETTING_LOG_LEVEL_INVALID": "日志级别仅支持 info/warn/error",
+    "SETTING_LANGUAGE_INVALID": "语言仅支持 zh-CN/en",
+    "AUTOSTART_UPDATE_FAILED": "更新开机自启设置失败：{{detail}}",
+    "PROVIDER_REQUEST_FAILED": "gist 服务请求失败：{{detail}}",
+    "WATCH_SET_FAILED": "文件监听设置更新失败：{{detail}}",
+    "LOG_DIR_OPEN_FAILED": "打开日志目录失败：{{detail}}"
+  },
+  "statusMsg": {
+    "local": {
+      "read_failed": "读取本地文件失败：{{detail}}",
+      "missing": "本地文件不存在或已删除"
+    },
+    "remote": {
+      "missing": "远端 gist 中不存在该文件"
+    },
+    "account": {
+      "not_found": "账号不存在"
+    },
+    "mapping": {
+      "not_found": "映射不存在"
+    },
+    "provider": {
+      "build_failed": "连接 gist 服务失败：{{detail}}",
+      "get_failed": "读取 gist 失败：{{detail}}"
+    },
+    "manual": {
+      "local_missing": "本地文件不存在",
+      "local_unchanged": "本地无未同步修改",
+      "remote_missing": "远端不存在该文件",
+      "remote_unchanged": "远端无变更"
+    },
+    "snapshot": {
+      "save_failed": "保存快照失败：{{detail}}"
+    },
+    "baseline": {
+      "created": "已建立同步基准"
+    },
+    "conflict": {
+      "dual_change": "本地与远端均有未同步修改，请人工选择保留哪边"
+    },
+    "upload": {
+      "skipped_disabled": "上传开关已关闭，跳过上传",
+      "verify_failed": "上传回读校验失败：{{detail}}",
+      "failed": "上传失败：{{detail}}"
+    },
+    "download": {
+      "skipped_disabled": "下载开关已关闭，跳过下载",
+      "write_failed": "写入本地文件失败：{{detail}}"
+    }
   },
   "settings": {
     "debounce": "防抖秒数",

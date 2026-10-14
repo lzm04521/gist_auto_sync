@@ -17,6 +17,7 @@ import {
   mappingList,
   mappingSetEnabled,
 } from "../api/ipc";
+import { ipcErrorMessage } from "../i18n/errors";
 import MappingForm from "../components/MappingForm";
 import type { Account, Mapping, MappingView } from "../types";
 
@@ -35,11 +36,11 @@ export default function Mappings() {
       setViews(await mappingList());
       setAccounts(await accountList());
     } catch (e) {
-      void message.error(String(e));
+      void message.error(ipcErrorMessage(e, t));
     } finally {
       setLoading(false);
     }
-  }, [message]);
+  }, [message, t]);
 
   useEffect(() => {
     void reload();
@@ -53,7 +54,7 @@ export default function Mappings() {
       await mappingSetEnabled(view.mapping.id, enabled);
       await reload();
     } catch (e) {
-      void message.error(String(e));
+      void message.error(ipcErrorMessage(e, t));
     }
   };
 
@@ -106,7 +107,7 @@ export default function Mappings() {
             ),
           },
           {
-            title: t("mappings.edit"),
+            title: t("common.actions"),
             render: (_, view) => (
               <Space>
                 <Switch
@@ -129,7 +130,7 @@ export default function Mappings() {
                       await mappingDelete(view.mapping.id);
                       await reload();
                     } catch (e) {
-                      void message.error(String(e));
+                      void message.error(ipcErrorMessage(e, t));
                     }
                   }}
                 >

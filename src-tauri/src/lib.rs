@@ -44,10 +44,14 @@ pub fn run() {
             let snapshots = Arc::new(SnapshotStore::new(config_dir.join("snapshots")));
             let log_dir = handle.path().app_log_dir().expect("无法确定日志目录");
             let log_level = config.read().settings.log_level.clone();
-            if let Err(e) = logging::init_logging(&log_dir, &log_level) {
-                // 日志初始化失败不阻塞应用，但要在控制台可见
-                eprintln!("{e}");
-            }
+            let log_reload = match logging::init_logging(&log_dir, &log_level) {
+                Ok(h) => Some(h),
+                // 日志初始化失败不阻塞应用，但要在控制台可见；级别改动退化为重启生效
+                Err(e) => {
+                    eprintln!("{e}");
+                    None
+                }
+            };
             // panic=abort 下闪退无痕：hook 同步直写 panic.log，成败均安装
             logging::install_panic_hook(&log_dir);
 
@@ -85,6 +89,7 @@ pub fn run() {
                 snapshots,
                 engine: engine.clone(),
                 log_dir,
+                log_reload,
             });
 
             setup_tray(app)?;

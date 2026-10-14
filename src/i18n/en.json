@@ -16,6 +16,7 @@
     "edit": "Edit",
     "delete": "Delete",
     "retry": "Retry",
+    "actions": "Actions",
     "loading": "Loading…",
     "empty": "No data"
   },
@@ -25,8 +26,7 @@
     "downloading": "Downloading",
     "conflict": "Conflict",
     "error": "Error",
-    "missing": "Missing",
-    "paused": "Paused"
+    "missing": "Missing"
   },
   "accounts": {
     "name": "Name",
@@ -74,6 +74,7 @@
   "dashboard": {
     "uploadNow": "Upload now",
     "downloadNow": "Download now",
+    "status": "Status",
     "pause": "Pause",
     "resume": "Enable",
     "resolve": "Resolve conflict",
@@ -90,6 +91,73 @@
     "remote": "Remote",
     "useLocal": "Overwrite remote with local",
     "useRemote": "Overwrite local with remote"
+  },
+  "errors": {
+    "ACCOUNT_NOT_FOUND": "Account not found",
+    "ACCOUNT_BASE_URL_INVALID": "Opengist instance URL must start with http(s)://",
+    "ACCOUNT_KEYRING_WRITE": "Failed to save access token: {{detail}}",
+    "ACCOUNT_IN_USE": "This account still has {{count}} mappings",
+    "CONFIG_SAVE_FAILED": "Failed to save config: {{detail}}",
+    "MAPPING_NOT_FOUND": "Mapping not found",
+    "MAPPING_LOCAL_ABSOLUTE": "Local path must be absolute",
+    "MAPPING_LOCAL_MISSING": "Local file does not exist",
+    "MAPPING_FILE_NOT_UTF8": "File is not valid UTF-8 text; only text files are supported",
+    "MAPPING_FILENAME_INVALID": "Cannot derive a filename from the path",
+    "MAPPING_LOCAL_DUPLICATE": "This local file is already used by another mapping",
+    "MAPPING_TRIPLE_DUPLICATE": "A mapping for the same file in the same gist already exists",
+    "MAPPING_CONFLICT": "Conflicts with another mapping (duplicate local file or gist file)",
+    "SYNC_DIRECTION_INVALID": "Unknown sync direction: {{detail}}",
+    "SETTING_DEBOUNCE_RANGE": "Debounce must be 1-3600 seconds",
+    "SETTING_POLL_RANGE": "Poll interval must be 1-1440 minutes",
+    "SETTING_LOG_LEVEL_INVALID": "Log level must be info/warn/error",
+    "SETTING_LANGUAGE_INVALID": "Language must be zh-CN/en",
+    "AUTOSTART_UPDATE_FAILED": "Failed to update launch-at-startup: {{detail}}",
+    "PROVIDER_REQUEST_FAILED": "Gist service request failed: {{detail}}",
+    "WATCH_SET_FAILED": "Failed to update file watching: {{detail}}",
+    "LOG_DIR_OPEN_FAILED": "Failed to open log directory: {{detail}}"
+  },
+  "statusMsg": {
+    "local": {
+      "read_failed": "Failed to read local file: {{detail}}",
+      "missing": "Local file does not exist or has been deleted"
+    },
+    "remote": {
+      "missing": "This file no longer exists in the remote gist"
+    },
+    "account": {
+      "not_found": "Account not found"
+    },
+    "mapping": {
+      "not_found": "Mapping not found"
+    },
+    "provider": {
+      "build_failed": "Failed to connect to gist service: {{detail}}",
+      "get_failed": "Failed to read gist: {{detail}}"
+    },
+    "manual": {
+      "local_missing": "Local file does not exist",
+      "local_unchanged": "No unsynced local changes",
+      "remote_missing": "File does not exist on the remote",
+      "remote_unchanged": "No remote changes"
+    },
+    "snapshot": {
+      "save_failed": "Failed to save snapshot: {{detail}}"
+    },
+    "baseline": {
+      "created": "Sync baseline established"
+    },
+    "conflict": {
+      "dual_change": "Both local and remote have unsynced changes; pick a side to keep"
+    },
+    "upload": {
+      "skipped_disabled": "Upload is disabled; skipped",
+      "verify_failed": "Upload read-back verification failed: {{detail}}",
+      "failed": "Upload failed: {{detail}}"
+    },
+    "download": {
+      "skipped_disabled": "Download is disabled; skipped",
+      "write_failed": "Failed to write local file: {{detail}}"
+    }
   },
   "settings": {
     "debounce": "Debounce (seconds)",

@@ -47,8 +47,7 @@ export type MappingStatus =
   | "downloading"
   | "conflict"
   | "error"
-  | "missing"
-  | "paused";
+  | "missing";
 
 export interface MappingView {
   mapping: Mapping;

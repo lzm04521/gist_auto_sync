@@ -10,6 +10,7 @@ import {
   syncManual,
   syncSetPaused,
 } from "../api/ipc";
+import { ipcErrorMessage, statusMessageText } from "../i18n/errors";
 import type { MappingStatus, MappingView } from "../types";
 import ConflictDialog from "../components/ConflictDialog";
 
@@ -24,8 +25,6 @@ export function statusColor(status: MappingStatus): string {
     case "uploading":
     case "downloading":
       return "blue";
-    case "paused":
-      return "default";
     default:
       return "green";
   }
@@ -50,11 +49,11 @@ export default function Dashboard() {
       setViews(await mappingList());
       setPaused(await syncIsPaused());
     } catch (e) {
-      void message.error(String(e));
+      void message.error(ipcErrorMessage(e, t));
     } finally {
       setLoading(false);
     }
-  }, [message]);
+  }, [message, t]);
 
   useEffect(() => {
     void reload();
@@ -85,7 +84,7 @@ export default function Dashboard() {
       await syncManual(view.mapping.id, direction);
       await reload();
     } catch (e) {
-      void message.error(String(e));
+      void message.error(ipcErrorMessage(e, t));
     }
   };
 
@@ -94,7 +93,7 @@ export default function Dashboard() {
       await mappingSetEnabled(view.mapping.id, !view.mapping.enabled);
       await reload();
     } catch (e) {
-      void message.error(String(e));
+      void message.error(ipcErrorMessage(e, t));
     }
   };
 
@@ -133,11 +132,11 @@ export default function Dashboard() {
             ),
           },
           {
-            title: t("common.edit"),
+            title: t("dashboard.status"),
             dataIndex: "status",
             width: 110,
             render: (_, v) => (
-              <Tooltip title={v.message}>
+              <Tooltip title={statusMessageText(v.message, t)}>
                 <Tag color={statusColor(v.status)}>{t(`status.${v.status}`)}</Tag>
               </Tooltip>
             ),
@@ -149,7 +148,7 @@ export default function Dashboard() {
             render: (iso: string | null) => formatTime(iso),
           },
           {
-            title: t("common.retry"),
+            title: t("common.actions"),
             width: 300,
             render: (_, v) => (
               <Space>

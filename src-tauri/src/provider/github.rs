@@ -144,12 +144,23 @@ impl GistProvider for GithubProvider {
             if !is_full_page {
                 break;
             }
+            if page >= super::MAX_LIST_PAGES {
+                tracing::warn!(
+                    "list_gists 分页达安全上限 {} 页，提前停止（服务端疑似异常）",
+                    super::MAX_LIST_PAGES
+                );
+                break;
+            }
             page += 1;
         }
         Ok(out)
     }
 
-    async fn get_gist(&self, gist_id: &str) -> Result<GistDetail, ProviderError> {
+    async fn get_gist(
+        &self,
+        gist_id: &str,
+        wanted_file: Option<&str>,
+    ) -> Result<GistDetail, ProviderError> {
         let resp = self
             .request(
                 reqwest::Method::GET,
@@ -160,7 +171,7 @@ impl GistProvider for GithubProvider {
             .await?;
         let g = check_response(resp).await?.json::<GhGist>().await?;
         let mut detail = to_detail(g);
-        self.backfill_raw_content(&mut detail).await?;
+        self.backfill_raw_content(&mut detail, wanted_file).await?;
         Ok(detail)
     }
 
@@ -181,16 +192,27 @@ impl GistProvider for GithubProvider {
             .await?;
         let g = check_response(resp).await?.json::<GhGist>().await?;
         let mut detail = to_detail(g);
-        self.backfill_raw_content(&mut detail).await?;
+        // PATCH 响应只关心被改的文件（回读校验用）
+        self.backfill_raw_content(&mut detail, Some(filename)).await?;
         Ok(detail)
     }
 }
 
 impl GithubProvider {
-    /// 详情响应 content 缺失（大文件被置 null）时，经 raw_url 回补
-    async fn backfill_raw_content(&self, detail: &mut GistDetail) -> Result<(), ProviderError> {
+    /// 详情响应 content 缺失（大文件被置 null）时，经 raw_url 回补。
+    /// `wanted_file`：只回补该文件，避免为 gist 内无关文件放大流量；None 全部回补。
+    async fn backfill_raw_content(
+        &self,
+        detail: &mut GistDetail,
+        wanted_file: Option<&str>,
+    ) -> Result<(), ProviderError> {
         for f in detail.files.iter_mut() {
             if f.content.is_some() {
+                continue;
+            }
+            if let Some(w) = wanted_file
+                && f.filename != w
+            {
                 continue;
             }
             let Some(raw_url) = f.raw_url.clone() else {
@@ -238,6 +260,24 @@ mod tests {
                 }
             }
         })
+    }
+
+    #[tokio::test]
+    async fn list_gists_stops_at_max_pages_on_runaway_server() {
+        // 异常服务端恒返满页：分页循环必须在安全上限处停止（防死循环）
+        let server = MockServer::start().await;
+        let full_page: Vec<_> = (0..100)
+            .map(|i| gist_json(&format!("g{i}"), "d", "a.txt", Some("x"), None))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/gists"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!(full_page)))
+            .expect(crate::provider::MAX_LIST_PAGES as u64)
+            .mount(&server)
+            .await;
+        let out = provider(&server).list_gists(None).await.unwrap();
+        assert_eq!(out.len(), 100, "同页内容去重后应恰为 100 条");
+        server.verify().await; // 请求数恰好停在安全上限
     }
 
     #[tokio::test]
@@ -324,10 +364,46 @@ mod tests {
             .mount(&server)
             .await;
 
-        let detail = provider(&server).get_gist("gist1").await.unwrap();
+        let detail = provider(&server).get_gist("gist1", Some("notes.md")).await.unwrap();
         assert_eq!(detail.files.len(), 1);
         assert_eq!(detail.files[0].filename, "notes.md");
         assert_eq!(detail.files[0].content.as_deref(), Some("raw content here"));
+    }
+
+    #[tokio::test]
+    async fn get_gist_backfills_only_wanted_file() {
+        // 双文件 gist：只有目标文件回补 raw，无关文件即使缺 content 也不拉（流量不放大）
+        let server = MockServer::start().await;
+        let raw_url = format!("{}/raw/gist1/notes.md", server.uri());
+        let body = json!({
+            "id": "gist1",
+            "description": "双文件",
+            "updated_at": "2026-10-13T08:00:00Z",
+            "files": {
+                "notes.md": { "filename": "notes.md", "raw_url": raw_url, "content": null, "size": 0, "truncated": false },
+                "other.md": { "filename": "other.md", "raw_url": null, "content": null, "size": 0, "truncated": false }
+            }
+        });
+        Mock::given(method("GET"))
+            .and(path("/gists/gist1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/raw/gist1/notes.md"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("raw content here"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let detail = provider(&server).get_gist("gist1", Some("notes.md")).await.unwrap();
+        // files 来自 HashMap，顺序不定：按文件名断言
+        let wanted = detail.files.iter().find(|f| f.filename == "notes.md").unwrap();
+        assert_eq!(wanted.content.as_deref(), Some("raw content here"));
+        let other = detail.files.iter().find(|f| f.filename == "other.md").unwrap();
+        assert!(other.content.is_none(), "无关文件不应被回补");
+        server.verify().await;
     }
 
     #[tokio::test]
