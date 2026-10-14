@@ -86,8 +86,8 @@ describe("History page", () => {
       currentLocal: "当前内容B",
     });
     renderPage();
-    await screen.findAllByRole("button", { name: /对 比|对比/ });
-    await userEvent.click((await screen.findAllByRole("button", { name: /对 比|对比/ }))[0]);
+    await screen.findByText("20261014123045123-local.md");
+    await userEvent.click(screen.getAllByRole("button", { name: /对 比|对比/ })[0]);
     expect(await screen.findByText("历史内容A")).toBeInTheDocument();
     expect(screen.getByText("当前内容B")).toBeInTheDocument();
     expect(mocks.historyPreview).toHaveBeenCalledWith("m1", "20261014123045123-local.md");
@@ -96,8 +96,8 @@ describe("History page", () => {
   it("点回滚出现确认弹窗，确认后调用回滚并提示成功", async () => {
     mocks.historyRollbackLocal.mockResolvedValue("idle");
     renderPage();
-    await screen.findAllByRole("button", { name: /回 滚|回滚/ });
-    await userEvent.click((await screen.findAllByRole("button", { name: /回 滚|回滚/ }))[0]);
+    await screen.findByText("20261014123045123-local.md");
+    await userEvent.click(screen.getAllByRole("button", { name: /回 滚|回滚/ })[0]);
     // 确认弹窗正文
     expect(
       await screen.findByText("将同时覆盖本地与远端文件，并在远端产生一次新提交"),
@@ -114,8 +114,8 @@ describe("History page", () => {
       new IpcError("HISTORY_FILE_NOT_FOUND", "归档文件不存在"),
     );
     renderPage();
-    await screen.findAllByRole("button", { name: /回 滚|回滚/ });
-    await userEvent.click((await screen.findAllByRole("button", { name: /回 滚|回滚/ }))[0]);
+    await screen.findByText("20261014123045123-local.md");
+    await userEvent.click(screen.getAllByRole("button", { name: /回 滚|回滚/ })[0]);
     await userEvent.click(await screen.findByRole("button", { name: /确 定|确定/ }));
     expect(await screen.findByText("归档文件不存在")).toBeInTheDocument();
   });
