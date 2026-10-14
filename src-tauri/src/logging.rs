@@ -90,8 +90,18 @@ impl<W: Write> Write for RedactingWriter<W> {
     }
 }
 
-/// 初始化按天滚动的文件日志（级别来自全局设置）
-pub fn init_logging(log_dir: &std::path::Path, level: &str) -> Result<(), String> {
+/// 运行时可调日志级别的句柄（设置页热更新用）
+pub type LogReloadHandle = tracing_subscriber::reload::Handle<
+    tracing_subscriber::filter::EnvFilter,
+    tracing_subscriber::Registry,
+>;
+
+/// 初始化按天滚动的文件日志（级别来自全局设置），返回热更新句柄。
+/// EnvFilter 用 reload::Layer 包装：per-layer filter 置于 fmt 层之前，作用域覆盖全部输出。
+pub fn init_logging(log_dir: &std::path::Path, level: &str) -> Result<LogReloadHandle, String> {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
     std::fs::create_dir_all(log_dir).map_err(|e| format!("创建日志目录失败: {e}"))?;
     let file_appender = tracing_appender::rolling::daily(log_dir, "gistsync.log");
     let (writer, guard) = tracing_appender::non_blocking(RedactingWriter::new(file_appender));
@@ -99,12 +109,21 @@ pub fn init_logging(log_dir: &std::path::Path, level: &str) -> Result<(), String
     std::mem::forget(guard);
     let filter = tracing_subscriber::EnvFilter::try_new(level)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(writer)
-        .with_ansi(false)
+    let (filter_layer, handle) = tracing_subscriber::reload::Layer::new(filter);
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(writer))
         .init();
-    Ok(())
+    Ok(handle)
+}
+
+/// 热更新日志级别（settings_update 调用；失败时配置已保存，重启后生效）
+pub fn set_log_level(handle: &LogReloadHandle, level: &str) -> Result<(), String> {
+    let filter = tracing_subscriber::EnvFilter::try_new(level)
+        .map_err(|e| format!("非法日志级别 {level}: {e}"))?;
+    handle
+        .modify(|f| *f = filter)
+        .map_err(|e| format!("更新日志级别失败: {e}"))
 }
 
 /// 安装 panic hook：panic 信息同步直写 panic.log（过 redact），

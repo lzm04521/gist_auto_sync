@@ -18,6 +18,8 @@ pub struct AppState {
     pub snapshots: Arc<SnapshotStore>,
     pub engine: Arc<Engine>,
     pub log_dir: std::path::PathBuf,
+    /// 日志级别热更新句柄（初始化失败时为 None，级别改动需重启生效）
+    pub log_reload: Option<crate::logging::LogReloadHandle>,
 }
 
 /// 把引擎状态事件转发到前端（event: sync://status）
@@ -496,15 +498,9 @@ pub fn settings_update(
     let debounce_secs = settings.debounce_seconds;
     let auto_start_changed = state.config.read().settings.auto_start != settings.auto_start;
     let auto_start_target = settings.auto_start;
-    state
-        .config
-        .update(|c| c.settings = settings)
-        .map_err(|e| e.to_string())?;
-    if debounce_changed {
-        // 防抖管道常驻且动态读窗口：只更新原子值，不重建 watcher
-        state.engine.set_debounce_window(debounce_secs);
-    }
-    // 开机自启联动 autostart 插件
+    let log_level_changed = state.config.read().settings.log_level != settings.log_level;
+    let log_level = settings.log_level.clone();
+    // 副作用先行：开机自启注册/注销失败时配置尚未落盘，两边保持一致
     if auto_start_changed {
         use tauri_plugin_autostart::ManagerExt;
         let autolaunch = app.autolaunch();
@@ -514,6 +510,30 @@ pub fn settings_update(
             autolaunch.disable()
         };
         result.map_err(|e| format!("更新开机自启设置失败: {e}"))?;
+    }
+    if let Err(e) = state.config.update(|c| c.settings = settings) {
+        // 配置落盘失败：回滚刚执行的副作用（best-effort），避免注册表与磁盘不一致
+        if auto_start_changed {
+            use tauri_plugin_autostart::ManagerExt;
+            let autolaunch = app.autolaunch();
+            let _ = if auto_start_target {
+                autolaunch.disable()
+            } else {
+                autolaunch.enable()
+            };
+        }
+        return Err(e.to_string());
+    }
+    if debounce_changed {
+        // 防抖管道常驻且动态读窗口：只更新原子值，不重建 watcher
+        state.engine.set_debounce_window(debounce_secs);
+    }
+    // 日志级别热更新：失败不回滚配置（级别已保存，重启后生效），仅告警留痕
+    if log_level_changed
+        && let Some(handle) = &state.log_reload
+        && let Err(e) = crate::logging::set_log_level(handle, &log_level)
+    {
+        tracing::warn!("日志级别热更新失败（重启后生效）: {e}");
     }
     Ok(())
 }
