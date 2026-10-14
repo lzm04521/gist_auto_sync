@@ -16,6 +16,7 @@
     "edit": "编辑",
     "delete": "删除",
     "retry": "重试",
+    "actions": "操作",
     "loading": "加载中…",
     "empty": "暂无数据"
   },
@@ -74,6 +75,7 @@
   "dashboard": {
     "uploadNow": "立即上传",
     "downloadNow": "立即下载",
+    "status": "状态",
     "pause": "暂停",
     "resume": "启用",
     "resolve": "解决冲突",

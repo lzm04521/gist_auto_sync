@@ -133,7 +133,7 @@ export default function Dashboard() {
             ),
           },
           {
-            title: t("common.edit"),
+            title: t("dashboard.status"),
             dataIndex: "status",
             width: 110,
             render: (_, v) => (
@@ -149,7 +149,7 @@ export default function Dashboard() {
             render: (iso: string | null) => formatTime(iso),
           },
           {
-            title: t("common.retry"),
+            title: t("common.actions"),
             width: 300,
             render: (_, v) => (
               <Space>

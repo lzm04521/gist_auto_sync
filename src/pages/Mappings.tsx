@@ -106,7 +106,7 @@ export default function Mappings() {
             ),
           },
           {
-            title: t("mappings.edit"),
+            title: t("common.actions"),
             render: (_, view) => (
               <Space>
                 <Switch

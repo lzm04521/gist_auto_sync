@@ -8,6 +8,10 @@ use crate::model::{Account, ProviderKind};
 pub mod github;
 pub mod opengist;
 
+/// list_gists 分页循环的页数安全上限：异常服务端恒返满页时避免死循环
+/// （100 页 × 100 条 = 1 万条 gist，远超个人用量；达上限即提前停止并 warn）
+pub(crate) const MAX_LIST_PAGES: u32 = 100;
+
 /// 认证用户信息（verify_token 返回）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

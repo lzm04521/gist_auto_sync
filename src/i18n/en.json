@@ -16,6 +16,7 @@
     "edit": "Edit",
     "delete": "Delete",
     "retry": "Retry",
+    "actions": "Actions",
     "loading": "Loading…",
     "empty": "No data"
   },
@@ -74,6 +75,7 @@
   "dashboard": {
     "uploadNow": "Upload now",
     "downloadNow": "Download now",
+    "status": "Status",
     "pause": "Pause",
     "resume": "Enable",
     "resolve": "Resolve conflict",

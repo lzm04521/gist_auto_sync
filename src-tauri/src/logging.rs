@@ -1,9 +1,18 @@
 use std::io::{self, Write};
 
 /// 把日志文本中疑似 token 的子串打码：
-/// 覆盖 GitHub（ghp_/gho_/ghu_/ghs_/ghr_/github_pat_）与 Opengist（og_）前缀
+/// 覆盖 GitHub（ghp_/gho_/ghu_/ghs_/ghr_/github_pat_）与 Opengist（og_）前缀。
+/// 每项附带 token 段最小长度：`og_` 过短会误伤普通文本（如 dog_food 的中段），
+/// 要求其后 token 段 ≥16 字符才打码；长前缀本身足够特异，1 即可。
 pub fn redact(s: &str) -> String {
-    const PREFIXES: [&str; 6] = ["github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "og_"];
+    const PREFIXES: [(&str, usize); 6] = [
+        ("github_pat_", 1),
+        ("ghp_", 1),
+        ("gho_", 1),
+        ("ghu_", 1),
+        ("ghs_", 1),
+        ("og_", 16),
+    ];
 
     let mut out = String::with_capacity(s.len());
     let bytes = s.as_bytes();
@@ -11,7 +20,7 @@ pub fn redact(s: &str) -> String {
     while i < bytes.len() {
         // 尝试在每个位置匹配 token 前缀
         let mut matched = None;
-        for p in PREFIXES {
+        for (p, _) in PREFIXES {
             if s[i..].starts_with(p) {
                 matched = Some(p);
                 break;
@@ -25,7 +34,17 @@ pub fn redact(s: &str) -> String {
             {
                 j += 1;
             }
-            out.push_str("***");
+            let min = PREFIXES
+                .iter()
+                .find(|(q, _)| *q == p)
+                .map(|(_, m)| *m)
+                .unwrap_or(1);
+            if j - (i + p.len()) >= min {
+                out.push_str("***");
+            } else {
+                // token 段过短：视为普通文本原样输出
+                out.push_str(&s[i..j]);
+            }
             i = j;
         } else {
             // 按字符边界推进（内容为 UTF-8）
@@ -133,7 +152,8 @@ mod tests {
             redact("Authorization: Bearer ghp_abc123DEF456xyz tail"),
             "Authorization: Bearer *** tail"
         );
-        assert_eq!(redact("token og_AbCdEf123456"), "token ***");
+        // og_ 要求 token 段 ≥16 字符（20 字符样本）
+        assert_eq!(redact("token og_AbCdEf1234567890ab"), "token ***");
         assert_eq!(
             redact("github_pat_11AAAA0000bbbCCC"),
             "***"
@@ -144,6 +164,15 @@ mod tests {
     fn redact_keeps_normal_text() {
         let normal = "同步完成 notes.md → gist abc123 (200 OK)";
         assert_eq!(redact(normal), normal);
+    }
+
+    #[test]
+    fn redact_og_prefix_requires_token_length() {
+        // og_ 后段过短（普通英文词）不打码
+        assert_eq!(redact("dog_food and log_level"), "dog_food and log_level");
+        // 恰好 16 字符：打码；15 字符：原样
+        assert_eq!(redact("og_abcdefghijklmnop"), "***");
+        assert_eq!(redact("og_abcdefghijklmno"), "og_abcdefghijklmno");
     }
 
     #[test]

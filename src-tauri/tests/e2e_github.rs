@@ -108,6 +108,29 @@ async fn delete_fixture_gist(gist_id: &str) {
         .await;
 }
 
+/// RAII：测试结束（含 assert 中途失败/unwind）时 best-effort 删除远端 gist fixture。
+/// Drop 可能发生在测试 runtime 线程上，不能嵌套 block_on——在独立线程建临时 runtime 执行。
+struct GistGuard(String);
+
+impl Drop for GistGuard {
+    fn drop(&mut self) {
+        let gist_id = self.0.clone();
+        let _ = std::thread::spawn(move || {
+            if std::env::var("GISTSYNC_E2E_TOKEN").is_err() {
+                return;
+            }
+            let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                return;
+            };
+            rt.block_on(delete_fixture_gist(&gist_id));
+        })
+        .join();
+    }
+}
+
 async fn remote_content(gist_id: &str) -> String {
     let token = std::env::var("GISTSYNC_E2E_TOKEN").unwrap();
     let provider = GithubProvider::new(token);
@@ -161,6 +184,7 @@ async fn patient_cycle(ctx: &SyncCtx, mapping: &Mapping, trigger: Trigger) -> Ma
 async fn e2e_github_roundtrip() {
     let (ctx, mut mapping, _dir) = setup().await;
     let gist_id = create_fixture_gist().await;
+    let _fixture = GistGuard(gist_id.clone());
     mapping.gist_id = gist_id.clone();
 
     // 1. 首次对账：内容一致 → 建立基准
@@ -205,7 +229,7 @@ async fn e2e_github_roundtrip() {
     // 快照时间是最近时间
     assert!(snapshot_state.last_synced_at <= Utc::now());
 
-    delete_fixture_gist(&gist_id).await;
+    // fixture 清理由 _fixture guard 的 Drop 兜底（正常/失败路径均执行）
 }
 
 #[tokio::test]

@@ -144,6 +144,13 @@ impl GistProvider for GithubProvider {
             if !is_full_page {
                 break;
             }
+            if page >= super::MAX_LIST_PAGES {
+                tracing::warn!(
+                    "list_gists 分页达安全上限 {} 页，提前停止（服务端疑似异常）",
+                    super::MAX_LIST_PAGES
+                );
+                break;
+            }
             page += 1;
         }
         Ok(out)
@@ -238,6 +245,24 @@ mod tests {
                 }
             }
         })
+    }
+
+    #[tokio::test]
+    async fn list_gists_stops_at_max_pages_on_runaway_server() {
+        // 异常服务端恒返满页：分页循环必须在安全上限处停止（防死循环）
+        let server = MockServer::start().await;
+        let full_page: Vec<_> = (0..100)
+            .map(|i| gist_json(&format!("g{i}"), "d", "a.txt", Some("x"), None))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/gists"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!(full_page)))
+            .expect(crate::provider::MAX_LIST_PAGES as u64)
+            .mount(&server)
+            .await;
+        let out = provider(&server).list_gists(None).await.unwrap();
+        assert_eq!(out.len(), 100, "同页内容去重后应恰为 100 条");
+        server.verify().await; // 请求数恰好停在安全上限
     }
 
     #[tokio::test]
