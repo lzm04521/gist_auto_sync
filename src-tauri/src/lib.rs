@@ -48,6 +48,8 @@ pub fn run() {
                 // 日志初始化失败不阻塞应用，但要在控制台可见
                 eprintln!("{e}");
             }
+            // panic=abort 下闪退无痕：hook 同步直写 panic.log，成败均安装
+            logging::install_panic_hook(&log_dir);
 
             // 开机自启按设置显式对齐一次：首次安装（默认 autoStart=true）也要注册成功
             {

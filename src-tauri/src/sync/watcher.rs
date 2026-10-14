@@ -1,19 +1,29 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use notify::Watcher;
 use tokio::sync::mpsc;
 
-/// 滑动防抖：窗口期内每来一个新事件就重置计时，静默期满发送最终路径（spec §6.1）
+/// 防抖窗口秒数（运行期可变，settings_update 原子更新，无需重建管道）
+pub type DebounceWindow = Arc<AtomicU64>;
+
+fn read_window(w: &AtomicU64) -> Duration {
+    Duration::from_secs(w.load(Ordering::Relaxed).clamp(1, 3600))
+}
+
+/// 滑动防抖：窗口期内每来一个新事件就重置计时，静默期满发送最终路径（spec §6.1）。
+/// 窗口秒数每轮动态读取，改设置即时生效（改小不影响已在等待中的旧 deadline，最多多等旧窗口一次）。
 pub async fn debounce_stream(
     mut rx: mpsc::Receiver<PathBuf>,
-    window: Duration,
+    window_secs: DebounceWindow,
     tx: mpsc::Sender<PathBuf>,
 ) {
     while let Some(first) = rx.recv().await {
         let mut last = first;
-        let mut deadline = tokio::time::Instant::now() + window;
+        let mut deadline = tokio::time::Instant::now() + read_window(&window_secs);
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining.is_zero() {
@@ -22,8 +32,8 @@ pub async fn debounce_stream(
             match tokio::time::timeout(remaining, rx.recv()).await {
                 Ok(Some(path)) => {
                     last = path;
-                    // 滑动窗口：新事件重置静默计时
-                    deadline = tokio::time::Instant::now() + window;
+                    // 滑动窗口：新事件按当前设置重置静默计时
+                    deadline = tokio::time::Instant::now() + read_window(&window_secs);
                 }
                 Ok(None) => break, // 上游关闭，立即结算
                 Err(_elapsed) => break, // 静默期满
@@ -45,18 +55,19 @@ fn path_key(p: &Path) -> String {
     p.to_string_lossy().to_ascii_lowercase()
 }
 
-/// 文件监听器：监听各映射文件的父目录（去重），事件过滤+防抖后输出"稳定下来"的文件路径。
+/// 文件监听器：监听各映射文件的父目录（去重），事件过滤后输出原始文件路径。
 /// Remove 事件也放行——由引擎按 MissingLocal 处理（spec §6.3）。
 pub struct FileWatcher {
     _watcher: notify::RecommendedWatcher,
 }
 
 impl FileWatcher {
-    /// 启动监听。需要在 tokio 运行时上下文中调用（内部 spawn 防抖任务）。
+    /// 启动监听（纯同步，可在任意线程调用）：事件经 event_tx 送出，
+    /// 防抖管道由调用方（Engine，需 runtime 上下文）负责 spawn——这里绝不 tokio::spawn，
+    /// 否则从 Tauri 同步命令（主线程，非 tokio runtime）调用会 panic，panic=abort 下直接闪退。
     pub fn start(
         watched_files: Vec<PathBuf>,
-        window: Duration,
-        out: mpsc::Sender<PathBuf>,
+        event_tx: mpsc::Sender<PathBuf>,
     ) -> notify::Result<Self> {
         let filter = make_filter(&watched_files);
         let dirs: HashSet<String> = watched_files
@@ -64,7 +75,6 @@ impl FileWatcher {
             .filter_map(|p| p.parent().map(path_key))
             .collect();
 
-        let (event_tx, event_rx) = mpsc::channel::<PathBuf>(256);
         let mut watcher = notify::recommended_watcher(
             move |res: Result<notify::Event, notify::Error>| {
                 let Ok(ev) = res else { return };
@@ -97,9 +107,6 @@ impl FileWatcher {
             return Err(notify::Error::new(notify::ErrorKind::WatchNotFound));
         }
 
-        let debounce_out = out;
-        tokio::spawn(debounce_stream(event_rx, window, debounce_out));
-
         Ok(Self { _watcher: watcher })
     }
 }
@@ -112,11 +119,15 @@ mod tests {
         PathBuf::from(s)
     }
 
+    fn window(secs: u64) -> DebounceWindow {
+        Arc::new(AtomicU64::new(secs))
+    }
+
     #[tokio::test(start_paused = true)]
     async fn burst_within_window_settles_once_at_end() {
         let (in_tx, in_rx) = mpsc::channel(16);
         let (out_tx, mut out_rx) = mpsc::channel(16);
-        tokio::spawn(debounce_stream(in_rx, Duration::from_secs(3), out_tx));
+        tokio::spawn(debounce_stream(in_rx, window(3), out_tx));
 
         in_tx.send(p("C:/a.md")).await.unwrap();
         tokio::time::advance(Duration::from_secs(1)).await;
@@ -135,24 +146,58 @@ mod tests {
         );
     }
 
+    /// 防抖窗口运行期改小后，后续新事件立即按新窗口结算（无需重建管道）
+    #[tokio::test(start_paused = true)]
+    async fn window_change_takes_effect_for_new_events() {
+        let (in_tx, in_rx) = mpsc::channel(16);
+        let (out_tx, mut out_rx) = mpsc::channel(16);
+        let win = window(10);
+        tokio::spawn(debounce_stream(in_rx, win.clone(), out_tx));
+
+        in_tx.send(p("C:/a.md")).await.unwrap();
+        tokio::time::advance(Duration::from_secs(2)).await;
+        win.store(1, Ordering::Relaxed);
+        // 新事件按新窗口 1s 重置静默计时
+        in_tx.send(p("C:/a.md")).await.unwrap();
+
+        let got = tokio::time::timeout(Duration::from_secs(3), out_rx.recv())
+            .await
+            .expect("1s 窗口静默期满应结算");
+        assert_eq!(got, Some(p("C:/a.md")));
+    }
+
+    /// 回归测试：FileWatcher::start 必须可在非 tokio runtime 线程调用。
+    /// 曾经 start 内部 tokio::spawn，从 Tauri 同步命令（主线程）调用时 panic，
+    /// panic=abort 下整个应用闪退（见 doc/20261014-bug报告-配置变更闪退.md）。
+    #[test]
+    fn watcher_start_works_outside_tokio_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.md");
+        std::fs::write(&file, "x").unwrap();
+        let (event_tx, _event_rx) = mpsc::channel(16);
+
+        let result = FileWatcher::start(vec![file], event_tx);
+        assert!(result.is_ok(), "非 runtime 线程启动监听不应 panic");
+    }
+
     // ── 终审修复通道：单个不可监听目录跳过而非整体失败 ──
-    #[tokio::test]
-    async fn watcher_start_skips_unwatchable_dir_but_keeps_rest() {
-        let (out_tx, _out_rx) = mpsc::channel(16);
+    #[test]
+    fn watcher_start_skips_unwatchable_dir_but_keeps_rest() {
+        let (event_tx, _event_rx) = mpsc::channel(16);
         let ghost = std::env::temp_dir().join("gistsync-ghost-dir").join("f.md");
         let real = tempfile::tempdir().unwrap();
         let real_file = real.path().join("a.md");
         std::fs::write(&real_file, "x").unwrap();
 
-        let result = FileWatcher::start(vec![ghost, real_file], Duration::from_secs(1), out_tx);
+        let result = FileWatcher::start(vec![ghost, real_file], event_tx);
         assert!(result.is_ok(), "单个失败目录应被跳过");
     }
 
-    #[tokio::test]
-    async fn watcher_start_all_dirs_unwatchable_errors() {
-        let (out_tx, _out_rx) = mpsc::channel(16);
+    #[test]
+    fn watcher_start_all_dirs_unwatchable_errors() {
+        let (event_tx, _event_rx) = mpsc::channel(16);
         let ghost = std::env::temp_dir().join("gistsync-ghost-dir2").join("f.md");
-        let result = FileWatcher::start(vec![ghost], Duration::from_secs(1), out_tx);
+        let result = FileWatcher::start(vec![ghost], event_tx);
         assert!(result.is_err());
     }
 
@@ -160,7 +205,7 @@ mod tests {
     async fn events_apart_settle_separately() {
         let (in_tx, in_rx) = mpsc::channel(16);
         let (out_tx, mut out_rx) = mpsc::channel(16);
-        tokio::spawn(debounce_stream(in_rx, Duration::from_secs(2), out_tx));
+        tokio::spawn(debounce_stream(in_rx, window(2), out_tx));
 
         in_tx.send(p("C:/a.md")).await.unwrap();
         let first = out_rx.recv().await.unwrap();

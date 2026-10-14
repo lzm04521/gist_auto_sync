@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use crate::model::Mapping;
 use crate::sync::engine::{run_sync_cycle_with_hint, MappingStatus, SyncCtx, Trigger};
-use crate::sync::watcher::FileWatcher;
+use crate::sync::watcher::{DebounceWindow, FileWatcher};
 
 /// 持久化状态（statuses.json），重启后恢复 Conflict/Error/Missing/Paused
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -30,6 +30,10 @@ pub struct Engine {
     retry_attempts: Mutex<HashMap<String, u32>>,
     last_poll: Mutex<HashMap<String, DateTime<Utc>>>,
     watcher: Mutex<Option<FileWatcher>>,
+    /// 防抖管道入口（常驻，watcher 重建只换生产端）：notify 事件 → 防抖 → settled_tx
+    debounce_in: mpsc::Sender<PathBuf>,
+    debounce_rx: Mutex<Option<mpsc::Receiver<PathBuf>>>,
+    debounce_window: DebounceWindow,
     settled_tx: mpsc::Sender<PathBuf>,
     settled_rx: Mutex<Option<mpsc::Receiver<PathBuf>>>,
 }
@@ -41,7 +45,11 @@ impl Engine {
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
+        let (debounce_in, debounce_rx) = mpsc::channel(256);
         let (settled_tx, settled_rx) = mpsc::channel(256);
+        let debounce_window = Arc::new(AtomicU64::new(
+            ctx.config.read().settings.debounce_seconds,
+        ));
         Ok(Self {
             ctx,
             statuses: Mutex::new(statuses),
@@ -50,14 +58,30 @@ impl Engine {
             retry_attempts: Mutex::new(HashMap::new()),
             last_poll: Mutex::new(HashMap::new()),
             watcher: Mutex::new(None),
+            debounce_in,
+            debounce_rx: Mutex::new(Some(debounce_rx)),
+            debounce_window,
             settled_tx,
             settled_rx: Mutex::new(Some(settled_rx)),
         })
     }
 
-    /// 启动常驻任务：settled 分发器 + 轮询循环。
+    /// 启动常驻任务：防抖管道 + settled 分发器 + 轮询循环。
+    /// 必须在 tokio 运行时上下文中调用（这里 spawn 常驻任务）。
     /// watcher 失败只降级（轮询/对账照常），不整体瘫痪。
     pub fn start(self: &Arc<Self>) -> Result<(), String> {
+        // 防抖管道：常驻一次，watcher 重建只换事件生产端（窗口动态读，改设置不重建）
+        let debounce_rx = self
+            .debounce_rx
+            .lock()
+            .expect("debounce_rx lock poisoned")
+            .take();
+        if let Some(rx) = debounce_rx {
+            let window = self.debounce_window.clone();
+            let out = self.settled_tx.clone();
+            tokio::spawn(crate::sync::watcher::debounce_stream(rx, window, out));
+        }
+
         if let Err(e) = self.apply_watch_set() {
             tracing::error!("文件监听启动失败（本轮降级为仅轮询）: {e}");
         }
@@ -250,7 +274,8 @@ impl Engine {
         self.paused.load(Ordering::SeqCst)
     }
 
-    /// 配置/防抖值变更后重建 watcher
+    /// 配置变更后重建 notify watcher（只换事件生产端，防抖管道常驻）。
+    /// 纯同步、无 runtime 依赖——从 Tauri 同步命令（主线程）调用安全。
     pub fn apply_watch_set(&self) -> Result<(), String> {
         let cfg = self.ctx.config.read();
         let files: Vec<PathBuf> = cfg
@@ -259,13 +284,17 @@ impl Engine {
             .filter(|m| m.enabled)
             .map(|m| PathBuf::from(&m.local_path))
             .collect();
-        let window = Duration::from_secs(cfg.settings.debounce_seconds.clamp(1, 3600));
         drop(cfg);
 
-        let watcher =
-            FileWatcher::start(files, window, self.settled_tx.clone()).map_err(|e| e.to_string())?;
+        let watcher = FileWatcher::start(files, self.debounce_in.clone())
+            .map_err(|e| e.to_string())?;
         *self.watcher.lock().expect("watcher lock poisoned") = Some(watcher);
         Ok(())
+    }
+
+    /// 更新防抖窗口（settings_update 用）：原子写，防抖循环下一轮事件生效，不重建 watcher
+    pub fn set_debounce_window(&self, secs: u64) {
+        self.debounce_window.store(secs, Ordering::Relaxed);
     }
 
     /// 当前全部持久化状态快照（mapping_list join 用）
@@ -543,5 +572,24 @@ mod tests {
             .filter(|d| !d.is_zero())
             .unwrap_or_else(|| crate::sync::engine::backoff_delay(3));
         assert_eq!(delay2, Duration::from_secs(4));
+    }
+
+    /// 回归测试：apply_watch_set 必须可在非 tokio runtime 线程调用
+    /// （Tauri 同步命令在主线程执行；曾经其内部 tokio::spawn 导致 panic=abort 闪退，
+    /// 见 doc/20261014-bug报告-配置变更闪退.md）
+    #[test]
+    fn apply_watch_set_works_outside_tokio_runtime() {
+        let f = fixture("local", "remote", None);
+        f.engine.apply_watch_set().expect("非 runtime 线程重建 watcher 不应 panic");
+    }
+
+    #[test]
+    fn set_debounce_window_stores_without_rebuild() {
+        let f = fixture("local", "remote", None);
+        f.engine.set_debounce_window(30);
+        assert_eq!(
+            f.engine.debounce_window.load(Ordering::Relaxed),
+            30
+        );
     }
 }

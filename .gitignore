@@ -40,6 +40,7 @@ Thumbs.db
 
 docs/*
 doc/*
+handoff/*
 .playwright-mcp/*
 
 AGENTS.md

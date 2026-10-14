@@ -489,6 +489,7 @@ pub fn settings_update(
         return Err("语言仅支持 zh-CN/en".into());
     }
     let debounce_changed = state.config.read().settings.debounce_seconds != settings.debounce_seconds;
+    let debounce_secs = settings.debounce_seconds;
     let auto_start_changed = state.config.read().settings.auto_start != settings.auto_start;
     let auto_start_target = settings.auto_start;
     state
@@ -496,7 +497,8 @@ pub fn settings_update(
         .update(|c| c.settings = settings)
         .map_err(|e| e.to_string())?;
     if debounce_changed {
-        state.engine.apply_watch_set().map_err(|e| e.to_string())?;
+        // 防抖管道常驻且动态读窗口：只更新原子值，不重建 watcher
+        state.engine.set_debounce_window(debounce_secs);
     }
     // 开机自启联动 autostart 插件
     if auto_start_changed {

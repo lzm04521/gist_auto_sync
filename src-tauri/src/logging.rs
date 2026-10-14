@@ -88,6 +88,41 @@ pub fn init_logging(log_dir: &std::path::Path, level: &str) -> Result<(), String
     Ok(())
 }
 
+/// 安装 panic hook：panic 信息同步直写 panic.log（过 redact），
+/// 绕过 tracing 的 non_blocking 缓冲——panic=abort 下缓冲内容会随进程一起丢失，
+/// 否则闪退无任何痕迹（见 doc/20261014-bug报告-配置变更闪退.md 边缘情况第 5 条）。
+pub fn install_panic_hook(log_dir: &std::path::Path) {
+    let panic_log = log_dir.join("panic.log");
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|l| format!(" at {}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_default();
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "non-string panic payload".to_string()
+        };
+        let line = format!(
+            "[{}] PANIC{location}: {payload}\n",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f")
+        );
+        // 尽力而为：失败也无法再上报（原 hook 可能也写不动任何地方）
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&panic_log)
+        {
+            let _ = f.write_all(redact(&line).as_bytes());
+            let _ = f.flush();
+        }
+        default_hook(info);
+    }));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
