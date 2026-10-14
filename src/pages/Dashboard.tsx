@@ -10,6 +10,7 @@ import {
   syncManual,
   syncSetPaused,
 } from "../api/ipc";
+import { ipcErrorMessage } from "../i18n/errors";
 import type { MappingStatus, MappingView } from "../types";
 import ConflictDialog from "../components/ConflictDialog";
 
@@ -48,11 +49,11 @@ export default function Dashboard() {
       setViews(await mappingList());
       setPaused(await syncIsPaused());
     } catch (e) {
-      void message.error(String(e));
+      void message.error(ipcErrorMessage(e, t));
     } finally {
       setLoading(false);
     }
-  }, [message]);
+  }, [message, t]);
 
   useEffect(() => {
     void reload();
@@ -83,7 +84,7 @@ export default function Dashboard() {
       await syncManual(view.mapping.id, direction);
       await reload();
     } catch (e) {
-      void message.error(String(e));
+      void message.error(ipcErrorMessage(e, t));
     }
   };
 
@@ -92,7 +93,7 @@ export default function Dashboard() {
       await mappingSetEnabled(view.mapping.id, !view.mapping.enabled);
       await reload();
     } catch (e) {
-      void message.error(String(e));
+      void message.error(ipcErrorMessage(e, t));
     }
   };
 

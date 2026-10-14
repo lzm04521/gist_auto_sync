@@ -12,9 +12,14 @@ const mocks = vi.hoisted(() => ({
   accountTest: vi.fn(),
 }));
 
-vi.mock("../api/ipc", () => mocks);
+vi.mock("../api/ipc", async () => {
+  const actual = await vi.importActual<typeof import("../api/ipc")>("../api/ipc");
+  // 保留 IpcError 等真实导出，仅替换 IPC 函数为 mock
+  return { ...actual, ...mocks };
+});
 
 import Accounts from "./Accounts";
+import { IpcError } from "../api/ipc";
 
 const githubAccount = {
   id: "a1",
@@ -106,9 +111,9 @@ describe("Accounts page", () => {
 
   it("删除被引用账号时按结构化错误码弹出强制删除确认", async () => {
     mocks.accountList.mockResolvedValue([githubAccount]);
-    // 后端结构化错误：{"code":"ACCOUNT_IN_USE","count":2}
+    // 后端结构化错误经 ipc.ts 解析后为 IpcError（code=ACCOUNT_IN_USE, count=2）
     mocks.accountDelete.mockRejectedValue(
-      new Error('{"code":"ACCOUNT_IN_USE","count":2}'),
+      new IpcError("ACCOUNT_IN_USE", "该账号仍有同步映射", 2),
     );
     render(
       <AntApp>

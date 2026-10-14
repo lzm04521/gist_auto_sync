@@ -1,7 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ settingsGet: vi.fn() }));
-vi.mock("../api/ipc", () => ({ settingsGet: mocks.settingsGet }));
+vi.mock("../api/ipc", async () => {
+  const actual = await vi.importActual<typeof import("../api/ipc")>("../api/ipc");
+  return { ...actual, settingsGet: mocks.settingsGet };
+});
 
 import i18n, { initLanguage } from "./index";
 

@@ -11,6 +11,7 @@ import {
 import { FolderOpenOutlined, SaveOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { appOpenLogDir, settingsGet, settingsUpdate } from "../api/ipc";
+import { ipcErrorMessage } from "../i18n/errors";
 import type { GlobalSettings } from "../types";
 
 interface FormValues {
@@ -33,7 +34,7 @@ export default function Settings() {
         form.setFieldsValue(s);
         setLoaded(true);
       })
-      .catch((e) => void message.error(String(e)));
+      .catch((e) => void message.error(ipcErrorMessage(e, t)));
   }, [form, message]);
 
   const onLanguageChange = (lang: string) => {
@@ -56,7 +57,7 @@ export default function Settings() {
       await settingsUpdate(settings);
       void message.success(t("settings.saved"));
     } catch (e) {
-      void message.error(String(e));
+      void message.error(ipcErrorMessage(e, t));
     }
   };
 

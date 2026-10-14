@@ -21,7 +21,9 @@ import {
   accountList,
   accountTest,
   accountUpdate,
+  IpcError,
 } from "../api/ipc";
+import { ipcErrorMessage } from "../i18n/errors";
 import type { Account, AccountInput, ProviderKind } from "../types";
 
 interface FormValues {
@@ -46,11 +48,11 @@ export default function Accounts() {
     try {
       setAccounts(await accountList());
     } catch (e) {
-      void message.error(String(e));
+      void message.error(ipcErrorMessage(e, t));
     } finally {
       setLoading(false);
     }
-  }, [message]);
+  }, [message, t]);
 
   useEffect(() => {
     void reload();
@@ -93,7 +95,7 @@ export default function Accounts() {
       setModalOpen(false);
       await reload();
     } catch (e) {
-      void message.error(String(e));
+      void message.error(ipcErrorMessage(e, t));
     }
   };
 
@@ -102,7 +104,7 @@ export default function Accounts() {
       const user = await accountTest(account.id);
       void message.success(t("accounts.testOk", { login: user.login }));
     } catch (e) {
-      void message.error(`${t("accounts.testFailed")}: ${String(e)}`);
+      void message.error(`${t("accounts.testFailed")}: ${ipcErrorMessage(e, t)}`);
     }
   };
 
@@ -111,29 +113,20 @@ export default function Accounts() {
       await accountDelete(account.id, force);
       await reload();
     } catch (e) {
-      const text = String(e);
-      // 结构化错误：{"code":"ACCOUNT_IN_USE","count":N} —— 按 code 分支，不匹配中文文案
-      const jsonPart = text.match(/\{[\s\S]*\}/)?.[0];
-      if (jsonPart) {
-        try {
-          const parsed = JSON.parse(jsonPart) as { code?: string; count?: number };
-          if (parsed.code === "ACCOUNT_IN_USE") {
-            modal.confirm({
-              title: t("accounts.forceDelete"),
-              content: t("accounts.forceDeleteConfirm", {
-                count: parsed.count ?? 0,
-              }),
-              okText: t("accounts.forceDelete"),
-              okButtonProps: { danger: true },
-              onOk: () => doDelete(account, true),
-            });
-            return;
-          }
-        } catch {
-          // 非法 JSON：按原文展示
-        }
+      // 结构化错误（IpcError）：按 code 分支，不匹配文案
+      if (e instanceof IpcError && e.code === "ACCOUNT_IN_USE") {
+        modal.confirm({
+          title: t("accounts.forceDelete"),
+          content: t("accounts.forceDeleteConfirm", {
+            count: e.count ?? 0,
+          }),
+          okText: t("accounts.forceDelete"),
+          okButtonProps: { danger: true },
+          onOk: () => doDelete(account, true),
+        });
+        return;
       }
-      void message.error(text);
+      void message.error(ipcErrorMessage(e, t));
     }
   };
 

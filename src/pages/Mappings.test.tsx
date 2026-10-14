@@ -14,10 +14,15 @@ const mocks = vi.hoisted(() => ({
   dialogOpen: vi.fn(),
 }));
 
-vi.mock("../api/ipc", () => mocks);
+vi.mock("../api/ipc", async () => {
+  const actual = await vi.importActual<typeof import("../api/ipc")>("../api/ipc");
+  // 保留 IpcError 等真实导出，仅替换 IPC 函数为 mock
+  return { ...actual, ...mocks };
+});
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.dialogOpen }));
 
 import Mappings from "./Mappings";
+import { IpcError } from "../api/ipc";
 
 const account = {
   id: "acc1",
@@ -155,7 +160,10 @@ describe("Mappings page", () => {
     mocks.gistListForAccount.mockResolvedValue([
       { id: "abc123", description: "工作笔记", updatedAt: "2026-10-13T08:00:00Z", files: ["todo.md"] },
     ]);
-    mocks.mappingCreate.mockRejectedValue(new Error("该本地文件已被其他映射使用"));
+    // 结构化错误经 ipc.ts 解析为 IpcError，页面按 code 走 i18n 文案
+    mocks.mappingCreate.mockRejectedValue(
+      new IpcError("MAPPING_LOCAL_DUPLICATE", "该本地文件已被其他映射使用"),
+    );
     render(
       <AntApp>
         <Mappings />

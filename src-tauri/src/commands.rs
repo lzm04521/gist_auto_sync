@@ -22,6 +22,12 @@ pub struct AppState {
     pub log_reload: Option<crate::logging::LogReloadHandle>,
 }
 
+/// IPC 命令错误统一结构化：`{"code":"...","detail":"..."}`。
+/// 前端按 code 走 i18n（errors.<code>），detail 兜底展示（原始错误/补充信息）。
+fn ipc_err(code: &str, detail: impl Into<String>) -> String {
+    serde_json::json!({ "code": code, "detail": detail.into() }).to_string()
+}
+
 /// 把引擎状态事件转发到前端（event: sync://status）
 pub struct IpcSink {
     pub app: AppHandle,
@@ -89,14 +95,15 @@ pub fn account_create(state: State<'_, AppState>, input: AccountInput) -> Result
         ProviderKind::Opengist => {
             let url = input.base_url.trim().trim_end_matches('/').to_string();
             if !url.starts_with("http") {
-                return Err("Opengist 实例地址必须以 http(s):// 开头".into());
+                return Err(ipc_err("ACCOUNT_BASE_URL_INVALID", "Opengist 实例地址必须以 http(s):// 开头"));
             }
             url
         }
     };
     let id = uuid::Uuid::new_v4().to_string();
     let token_ref = secrets::token_ref_for(&id);
-    secrets::save_token(&token_ref, &input.token).map_err(|e| e.to_string())?;
+    secrets::save_token(&token_ref, &input.token)
+        .map_err(|e| ipc_err("ACCOUNT_KEYRING_WRITE", e.to_string()))?;
 
     let account = Account {
         id,
@@ -108,7 +115,7 @@ pub fn account_create(state: State<'_, AppState>, input: AccountInput) -> Result
     if let Err(e) = state.config.update(|c| c.accounts.push(account.clone())) {
         // 配置落盘失败：清理已写入的凭据，避免 keyring 孤儿条目（best-effort，失败不掩盖原错误）
         let _ = secrets::delete_token(account.token_ref.as_str());
-        return Err(e.to_string());
+        return Err(ipc_err("CONFIG_SAVE_FAILED", e.to_string()));
     }
     Ok(account)
 }
@@ -125,17 +132,18 @@ pub fn account_update(
         .accounts
         .into_iter()
         .find(|a| a.id == id)
-        .ok_or("账号不存在")?;
+        .ok_or_else(|| ipc_err("ACCOUNT_NOT_FOUND", "账号不存在"))?;
     let token_ref = existing.token_ref.clone();
     if !input.token.trim().is_empty() {
-        secrets::save_token(&token_ref, input.token.trim()).map_err(|e| e.to_string())?;
+        secrets::save_token(&token_ref, input.token.trim())
+            .map_err(|e| ipc_err("ACCOUNT_KEYRING_WRITE", e.to_string()))?;
     }
     let base_url = match input.provider {
         ProviderKind::Github => "https://api.github.com".to_string(),
         ProviderKind::Opengist => {
             let url = input.base_url.trim().trim_end_matches('/').to_string();
             if !url.starts_with("http") {
-                return Err("Opengist 实例地址必须以 http(s):// 开头".into());
+                return Err(ipc_err("ACCOUNT_BASE_URL_INVALID", "Opengist 实例地址必须以 http(s):// 开头"));
             }
             url
         }
@@ -149,7 +157,7 @@ pub fn account_update(
                 a.base_url = base_url;
             }
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ipc_err("CONFIG_SAVE_FAILED", e.to_string()))?;
     // token/实例可能变了：缓存失效
     state.ctx_providers().invalidate(&id);
     Ok(())
@@ -163,7 +171,7 @@ pub fn account_delete(state: State<'_, AppState>, id: String, force: bool) -> Re
         .accounts
         .into_iter()
         .find(|a| a.id == id)
-        .ok_or("账号不存在")?;
+        .ok_or_else(|| ipc_err("ACCOUNT_NOT_FOUND", "账号不存在"))?;
     let mappings: Vec<Mapping> = state
         .config
         .read()
@@ -172,9 +180,14 @@ pub fn account_delete(state: State<'_, AppState>, id: String, force: bool) -> Re
         .filter(|m| m.account_id == id)
         .collect();
     if !mappings.is_empty() && !force {
-        // 结构化错误（JSON），前端按 code 分支而非匹配中文文案
+        // 结构化错误：前端按 code 分支（强删确认框），count 参与文案插值
         return Err(
-            serde_json::json!({ "code": "ACCOUNT_IN_USE", "count": mappings.len() }).to_string(),
+            serde_json::json!({
+                "code": "ACCOUNT_IN_USE",
+                "detail": "该账号仍有同步映射",
+                "count": mappings.len()
+            })
+            .to_string(),
         );
     }
     for m in &mappings {
@@ -187,7 +200,7 @@ pub fn account_delete(state: State<'_, AppState>, id: String, force: bool) -> Re
             c.accounts.retain(|a| a.id != id);
             c.mappings.retain(|m| m.account_id != id);
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ipc_err("CONFIG_SAVE_FAILED", e.to_string()))?;
     // token 引用已无意义，尽力清理（失败不阻塞删除）
     let _ = secrets::delete_token(&existing.token_ref);
     state.ctx_providers().invalidate(&id);
@@ -203,13 +216,16 @@ pub async fn account_test(state: State<'_, AppState>, id: String) -> Result<User
         .accounts
         .into_iter()
         .find(|a| a.id == id)
-        .ok_or("账号不存在")?;
+        .ok_or_else(|| ipc_err("ACCOUNT_NOT_FOUND", "账号不存在"))?;
     let provider = state
         .ctx_providers()
         .get_or_build(&account)
         .await
-        .map_err(|e| e.to_string())?;
-    provider.verify_token().await.map_err(|e| e.to_string())
+        .map_err(|e| ipc_err("PROVIDER_REQUEST_FAILED", e.to_string()))?;
+    provider
+        .verify_token()
+        .await
+        .map_err(|e| ipc_err("PROVIDER_REQUEST_FAILED", e.to_string()))
 }
 
 // ── 映射命令 ─────────────────────────────────────────────────────────
@@ -261,22 +277,24 @@ fn validate_mapping(
         .iter()
         .any(|a| a.id == input.account_id)
     {
-        return Err("所选账号不存在".into());
+        return Err(ipc_err("ACCOUNT_NOT_FOUND", "所选账号不存在"));
     }
     let path = Path::new(&input.local_path);
     if !path.is_absolute() {
-        return Err("本地路径必须是绝对路径".into());
+        return Err(ipc_err("MAPPING_LOCAL_ABSOLUTE", "本地路径必须是绝对路径"));
     }
     if !path.is_file() {
-        return Err("本地文件不存在".into());
+        return Err(ipc_err("MAPPING_LOCAL_MISSING", "本地文件不存在"));
     }
     // UTF-8 文本校验（V0.1 仅支持文本文件）
-    std::fs::read_to_string(path).map_err(|_| "文件不是有效的 UTF-8 文本，V0.1 仅支持文本文件")?;
+    std::fs::read_to_string(path).map_err(|_| {
+        ipc_err("MAPPING_FILE_NOT_UTF8", "文件不是有效的 UTF-8 文本，V0.1 仅支持文本文件")
+    })?;
 
     let gist_filename = if input.gist_filename.trim().is_empty() {
         path.file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .ok_or("无法从路径推导文件名")?
+            .ok_or_else(|| ipc_err("MAPPING_FILENAME_INVALID", "无法从路径推导文件名"))?
     } else {
         input.gist_filename.trim().to_string()
     };
@@ -288,13 +306,13 @@ fn validate_mapping(
             continue;
         }
         if m.local_path.to_ascii_lowercase() == lower {
-            return Err("该本地文件已被其他映射使用".into());
+            return Err(ipc_err("MAPPING_LOCAL_DUPLICATE", "该本地文件已被其他映射使用"));
         }
         if m.account_id == input.account_id
             && m.gist_id == input.gist_id
             && m.gist_filename == gist_filename
         {
-            return Err("该账号下相同 gist 的相同文件已有映射".into());
+            return Err(ipc_err("MAPPING_TRIPLE_DUPLICATE", "该账号下相同 gist 的相同文件已有映射"));
         }
     }
     Ok((normalize_stored_path(&input.local_path), gist_filename))
@@ -329,20 +347,23 @@ pub fn mapping_create(state: State<'_, AppState>, input: MappingInput) -> Result
                 .iter()
                 .any(|m| m.local_path.eq_ignore_ascii_case(&stored_path))
             {
-                return Err("该本地文件已被其他映射使用".into());
+                return Err(ipc_err("MAPPING_LOCAL_DUPLICATE", "该本地文件已被其他映射使用"));
             }
             if c.mappings.iter().any(|m| {
                 (m.account_id.clone(), m.gist_id.clone(), m.gist_filename.clone()) == dup_key
             }) {
-                return Err("该账号下相同 gist 的相同文件已有映射".into());
+                return Err(ipc_err("MAPPING_TRIPLE_DUPLICATE", "该账号下相同 gist 的相同文件已有映射"));
             }
             c.mappings.push(stored);
             Ok(())
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ipc_err("CONFIG_SAVE_FAILED", e.to_string()))?;
     outcome?;
     if mapping.enabled {
-        state.engine.apply_watch_set().map_err(|e| e.to_string())?;
+        state
+            .engine
+            .apply_watch_set()
+            .map_err(|e| ipc_err("WATCH_SET_FAILED", e.to_string()))?;
     }
     Ok(mapping)
 }
@@ -364,10 +385,10 @@ pub fn mapping_update(
                     && (other.local_path.eq_ignore_ascii_case(&local_path)
                         || (other.account_id.clone(), other.gist_id.clone(), other.gist_filename.clone()) == dup_key)
             }) {
-                return Err("与其他映射冲突（本地文件或 gist 文件重复）".into());
+                return Err(ipc_err("MAPPING_CONFLICT", "与其他映射冲突（本地文件或 gist 文件重复）"));
             }
             let Some(m) = c.mappings.iter_mut().find(|m| m.id == id) else {
-                return Err("映射不存在".into());
+                return Err(ipc_err("MAPPING_NOT_FOUND", "映射不存在"));
             };
             rebuild = m.local_path != local_path || m.enabled != input.enabled;
             m.local_path = local_path;
@@ -379,10 +400,13 @@ pub fn mapping_update(
             m.enabled = input.enabled;
             Ok(())
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ipc_err("CONFIG_SAVE_FAILED", e.to_string()))?;
     outcome?;
     if rebuild {
-        state.engine.apply_watch_set().map_err(|e| e.to_string())?;
+        state
+            .engine
+            .apply_watch_set()
+            .map_err(|e| ipc_err("WATCH_SET_FAILED", e.to_string()))?;
     }
     Ok(())
 }
@@ -392,10 +416,13 @@ pub fn mapping_delete(state: State<'_, AppState>, id: String) -> Result<(), Stri
     state
         .config
         .update(|c| c.mappings.retain(|m| m.id != id))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ipc_err("CONFIG_SAVE_FAILED", e.to_string()))?;
     let _ = state.snapshots.remove_mapping(&id);
     state.engine.remove_status(&id);
-    state.engine.apply_watch_set().map_err(|e| e.to_string())?;
+    state
+        .engine
+        .apply_watch_set()
+        .map_err(|e| ipc_err("WATCH_SET_FAILED", e.to_string()))?;
     Ok(())
 }
 
@@ -412,8 +439,11 @@ pub async fn mapping_set_enabled(
                 m.enabled = enabled;
             }
         })
-        .map_err(|e| e.to_string())?;
-    state.engine.apply_watch_set().map_err(|e| e.to_string())?;
+        .map_err(|e| ipc_err("CONFIG_SAVE_FAILED", e.to_string()))?;
+    state
+        .engine
+        .apply_watch_set()
+        .map_err(|e| ipc_err("WATCH_SET_FAILED", e.to_string()))?;
     if enabled {
         // 重开开关：立即跑一轮 Poll，补偿关闭期间错过的远端变更
         let _ = state.engine.run_one(&id, Trigger::Poll).await;
@@ -434,13 +464,16 @@ pub async fn gist_list_for_account(
         .accounts
         .into_iter()
         .find(|a| a.id == account_id)
-        .ok_or("账号不存在")?;
+        .ok_or_else(|| ipc_err("ACCOUNT_NOT_FOUND", "账号不存在"))?;
     let provider = state
         .ctx_providers()
         .get_or_build(&account)
         .await
-        .map_err(|e| e.to_string())?;
-    let mut gists = provider.list_gists(None).await.map_err(|e| e.to_string())?;
+        .map_err(|e| ipc_err("PROVIDER_REQUEST_FAILED", e.to_string()))?;
+    let mut gists = provider
+        .list_gists(None)
+        .await
+        .map_err(|e| ipc_err("PROVIDER_REQUEST_FAILED", e.to_string()))?;
     gists.sort_by_key(|g| std::cmp::Reverse(g.updated_at));
     Ok(gists)
 }
@@ -454,7 +487,7 @@ pub async fn sync_manual(
     let trigger = match direction.as_str() {
         "upload" => Trigger::ManualUpload,
         "download" => Trigger::ManualDownload,
-        other => return Err(format!("未知的同步方向: {other}")),
+        other => return Err(ipc_err("SYNC_DIRECTION_INVALID", format!("未知的同步方向: {other}"))),
     };
     Ok(state.engine.run_one(&mapping_id, trigger).await)
 }
@@ -483,16 +516,16 @@ pub fn settings_update(
     settings: GlobalSettings,
 ) -> Result<(), String> {
     if !(1..=3600).contains(&settings.debounce_seconds) {
-        return Err("防抖秒数须在 1~3600 之间".into());
+        return Err(ipc_err("SETTING_DEBOUNCE_RANGE", "防抖秒数须在 1~3600 之间"));
     }
     if !(1..=1440).contains(&settings.poll_interval_minutes) {
-        return Err("轮询间隔须在 1~1440 分钟之间".into());
+        return Err(ipc_err("SETTING_POLL_RANGE", "轮询间隔须在 1~1440 分钟之间"));
     }
     if !["info", "warn", "error"].contains(&settings.log_level.as_str()) {
-        return Err("日志级别仅支持 info/warn/error".into());
+        return Err(ipc_err("SETTING_LOG_LEVEL_INVALID", "日志级别仅支持 info/warn/error"));
     }
     if !["zh-CN", "en"].contains(&settings.language.as_str()) {
-        return Err("语言仅支持 zh-CN/en".into());
+        return Err(ipc_err("SETTING_LANGUAGE_INVALID", "语言仅支持 zh-CN/en"));
     }
     let debounce_changed = state.config.read().settings.debounce_seconds != settings.debounce_seconds;
     let debounce_secs = settings.debounce_seconds;
@@ -509,7 +542,7 @@ pub fn settings_update(
         } else {
             autolaunch.disable()
         };
-        result.map_err(|e| format!("更新开机自启设置失败: {e}"))?;
+        result.map_err(|e| ipc_err("AUTOSTART_UPDATE_FAILED", format!("更新开机自启设置失败: {e}")))?;
     }
     if let Err(e) = state.config.update(|c| c.settings = settings) {
         // 配置落盘失败：回滚刚执行的副作用（best-effort），避免注册表与磁盘不一致
@@ -522,7 +555,7 @@ pub fn settings_update(
                 autolaunch.enable()
             };
         }
-        return Err(e.to_string());
+        return Err(ipc_err("CONFIG_SAVE_FAILED", e.to_string()));
     }
     if debounce_changed {
         // 防抖管道常驻且动态读窗口：只更新原子值，不重建 watcher
@@ -559,24 +592,24 @@ pub async fn conflict_preview(
         .mappings
         .into_iter()
         .find(|m| m.id == mapping_id)
-        .ok_or("映射不存在")?;
+        .ok_or_else(|| ipc_err("MAPPING_NOT_FOUND", "映射不存在"))?;
     let account = state
         .config
         .read()
         .accounts
         .into_iter()
         .find(|a| a.id == mapping.account_id)
-        .ok_or("账号不存在")?;
+        .ok_or_else(|| ipc_err("ACCOUNT_NOT_FOUND", "账号不存在"))?;
     let local = std::fs::read_to_string(&mapping.local_path).ok();
     let provider = state
         .ctx_providers()
         .get_or_build(&account)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ipc_err("PROVIDER_REQUEST_FAILED", e.to_string()))?;
     let detail = provider
         .get_gist(&mapping.gist_id, Some(&mapping.gist_filename))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ipc_err("PROVIDER_REQUEST_FAILED", e.to_string()))?;
     let remote = detail
         .files
         .into_iter()
@@ -587,8 +620,10 @@ pub async fn conflict_preview(
 
 #[tauri::command]
 pub fn app_open_log_dir(state: State<'_, AppState>) -> Result<(), String> {
-    std::fs::create_dir_all(&state.log_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&state.log_dir)
+        .map_err(|e| ipc_err("LOG_DIR_OPEN_FAILED", format!("创建日志目录失败: {e}")))?;
     crate::open_in_explorer(&state.log_dir)
+        .map_err(|e| ipc_err("LOG_DIR_OPEN_FAILED", e))
 }
 
 impl AppState {
