@@ -128,6 +128,8 @@ pub fn run() {
             commands::sync_manual,
             commands::sync_set_paused,
             commands::sync_is_paused,
+            commands::history_rollback_local,
+            commands::history_rollback_remote,
             commands::settings_get,
             commands::settings_update,
             commands::conflict_preview,

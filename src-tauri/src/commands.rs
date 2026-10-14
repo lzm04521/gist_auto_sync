@@ -502,6 +502,49 @@ pub fn sync_is_paused(state: State<'_, AppState>) -> bool {
     state.engine.is_global_paused()
 }
 
+/// 回滚到本地归档版本（本地与远端同时恢复）
+#[tauri::command]
+pub async fn history_rollback_local(
+    state: State<'_, AppState>,
+    mapping_id: String,
+    file_name: String,
+) -> Result<MappingStatus, String> {
+    if !crate::sync::history::is_archive_name(&file_name) {
+        return Err(ipc_err("HISTORY_FILE_INVALID", "非法的归档文件名"));
+    }
+    let account_id = {
+        let cfg = state.config.read();
+        let Some(m) = cfg.mappings.iter().find(|m| m.id == mapping_id) else {
+            return Err(ipc_err("MAPPING_NOT_FOUND", "映射不存在"));
+        };
+        m.account_id.clone()
+    };
+    if !state.config.read().accounts.iter().any(|a| a.id == account_id) {
+        return Err(ipc_err("ACCOUNT_NOT_FOUND", "账号不存在"));
+    }
+    Ok(state.engine.rollback_to_archive(&mapping_id, &file_name).await)
+}
+
+/// 回滚到远端 gist 指定版本（本地与远端同时恢复）
+#[tauri::command]
+pub async fn history_rollback_remote(
+    state: State<'_, AppState>,
+    mapping_id: String,
+    revision: String,
+) -> Result<MappingStatus, String> {
+    let account_id = {
+        let cfg = state.config.read();
+        let Some(m) = cfg.mappings.iter().find(|m| m.id == mapping_id) else {
+            return Err(ipc_err("MAPPING_NOT_FOUND", "映射不存在"));
+        };
+        m.account_id.clone()
+    };
+    if !state.config.read().accounts.iter().any(|a| a.id == account_id) {
+        return Err(ipc_err("ACCOUNT_NOT_FOUND", "账号不存在"));
+    }
+    Ok(state.engine.rollback_to_revision(&mapping_id, &revision).await)
+}
+
 // ── 全局设置 ─────────────────────────────────────────────────────────
 
 #[tauri::command]

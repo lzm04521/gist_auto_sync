@@ -6,7 +6,7 @@ use std::time::SystemTime;
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::history::{append_entry, prune, HistoryEntry, HistoryReason};
+use super::history::{append_entry, prune, read_archive, HistoryEntry, HistoryReason};
 
 /// 被覆盖的一侧（历史归档用）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +157,11 @@ impl SnapshotStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e),
         }
+    }
+
+    /// 读该映射的归档文件内容（不合法文件名 → InvalidInput，root 不外泄）
+    pub fn read_archive(&self, mapping_id: &str, file_name: &str) -> std::io::Result<String> {
+        read_archive(&self.mapping_dir(mapping_id), file_name)
     }
 
     fn mapping_dir(&self, mapping_id: &str) -> PathBuf {

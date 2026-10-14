@@ -66,6 +66,18 @@ pub fn append_entry(mapping_dir: &Path, entry: &HistoryEntry) -> std::io::Result
     file.write_all(b"\n")
 }
 
+/// 读归档文件内容。文件名不合法（防路径穿越）→ InvalidInput（错误信息即错误码），
+/// 文件不存在 → NotFound。
+pub fn read_archive(mapping_dir: &Path, file_name: &str) -> std::io::Result<String> {
+    if !is_archive_name(file_name) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "HISTORY_FILE_INVALID",
+        ));
+    }
+    fs::read_to_string(mapping_dir.join(file_name))
+}
+
 /// 历史列表：jsonl 行 + 目录中不在 jsonl 里的裸归档文件（legacy），按 ts 倒序。
 /// 坏行/坏文件名跳过，不报错。
 pub fn list_entries(mapping_dir: &Path) -> Vec<HistoryEntry> {
