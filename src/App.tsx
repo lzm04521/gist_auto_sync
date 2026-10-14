@@ -5,12 +5,14 @@ import enUS from "antd/locale/en_US";
 import {
   AppstoreOutlined,
   CloudSyncOutlined,
+  HistoryOutlined,
   SettingOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import Accounts from "./pages/Accounts";
 import Dashboard from "./pages/Dashboard";
+import History from "./pages/History";
 import Mappings from "./pages/Mappings";
 import Settings from "./pages/Settings";
 
@@ -19,6 +21,7 @@ const { Sider, Header, Content } = Layout;
 const menuItems = [
   { key: "/", icon: <AppstoreOutlined />, ns: "menu.dashboard" },
   { key: "/mappings", icon: <CloudSyncOutlined />, ns: "menu.mappings" },
+  { key: "/history", icon: <HistoryOutlined />, ns: "menu.history" },
   { key: "/accounts", icon: <UserOutlined />, ns: "menu.accounts" },
   { key: "/settings", icon: <SettingOutlined />, ns: "menu.settings" },
 ];
@@ -59,6 +62,7 @@ function AppLayout() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/mappings" element={<Mappings />} />
+            <Route path="/history" element={<History />} />
             <Route path="/accounts" element={<Accounts />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>

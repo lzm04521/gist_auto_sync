@@ -3,8 +3,11 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   Account,
   AccountInput,
+  GistCommit,
   GistSummary,
   GlobalSettings,
+  HistoryEntry,
+  HistoryPreview,
   Mapping,
   MappingInput,
   MappingStatus,
@@ -120,6 +123,26 @@ export interface ConflictPreview {
 
 export const conflictPreview = (mappingId: string) =>
   unwrap(invoke<ConflictPreview>("conflict_preview", { mappingId }));
+
+// ── 历史与版本（V0.3）────────────────────────────────────────────────
+
+export const historyList = (mappingId: string) =>
+  unwrap(invoke<HistoryEntry[]>("history_list", { mappingId }));
+
+export const historyPreview = (mappingId: string, fileName: string) =>
+  unwrap(invoke<HistoryPreview>("history_preview", { mappingId, fileName }));
+
+export const historyRollbackLocal = (mappingId: string, fileName: string) =>
+  unwrap(invoke<MappingStatus>("history_rollback_local", { mappingId, fileName }));
+
+export const gistCommitList = (mappingId: string) =>
+  unwrap(invoke<GistCommit[]>("gist_commit_list", { mappingId }));
+
+export const gistCommitPreview = (mappingId: string, revision: string) =>
+  unwrap(invoke<HistoryPreview>("gist_commit_preview", { mappingId, revision }));
+
+export const historyRollbackRemote = (mappingId: string, revision: string) =>
+  unwrap(invoke<MappingStatus>("history_rollback_remote", { mappingId, revision }));
 
 // ── 事件 ─────────────────────────────────────────────────────────────
 

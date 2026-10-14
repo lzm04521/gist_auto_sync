@@ -79,3 +79,27 @@ export interface MappingInput {
   downloadEnabled: boolean;
   enabled: boolean;
 }
+
+// ── 历史（V0.3）────────────────────────────────────────────────────────
+
+export type HistorySide = "local" | "remote";
+
+export type HistoryReason = "download" | "upload" | "rollback" | "legacy";
+
+export interface HistoryEntry {
+  ts: string;
+  side: HistorySide;
+  reason: HistoryReason;
+  file: string;
+  sizeBytes: number;
+}
+
+export interface GistCommit {
+  revision: string;
+  committedAt: string;
+}
+
+export interface HistoryPreview {
+  historical: string;
+  currentLocal: string;
+}

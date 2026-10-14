@@ -5,6 +5,7 @@
   "menu": {
     "dashboard": "仪表盘",
     "mappings": "同步映射",
+    "history": "历史",
     "accounts": "账号",
     "settings": "设置"
   },
@@ -92,6 +93,32 @@
     "useLocal": "用本地覆盖远端",
     "useRemote": "用远端覆盖本地"
   },
+  "history": {
+    "title": "历史",
+    "mapping": "映射",
+    "tabLocal": "本地归档",
+    "tabCommits": "远端历史",
+    "colTime": "时间",
+    "colSide": "被覆盖侧",
+    "colReason": "原因",
+    "colSize": "大小",
+    "colRevision": "版本",
+    "colCommittedAt": "提交时间",
+    "sideLocal": "本地",
+    "sideRemote": "远端",
+    "reasonDownload": "下载覆盖",
+    "reasonUpload": "上传覆盖",
+    "reasonRollback": "回滚",
+    "reasonLegacy": "早期归档",
+    "compare": "对比",
+    "rollback": "回滚",
+    "rollbackConfirmTitle": "确认回滚",
+    "rollbackConfirmBody": "将同时覆盖本地与远端文件，并在远端产生一次新提交",
+    "rollbackOk": "回滚成功",
+    "previewHistorical": "历史版本",
+    "previewCurrent": "当前本地",
+    "empty": "暂无历史"
+  },
   "errors": {
     "ACCOUNT_NOT_FOUND": "账号不存在",
     "ACCOUNT_BASE_URL_INVALID": "Opengist 实例地址必须以 http(s):// 开头",
@@ -114,7 +141,10 @@
     "AUTOSTART_UPDATE_FAILED": "更新开机自启设置失败：{{detail}}",
     "PROVIDER_REQUEST_FAILED": "gist 服务请求失败：{{detail}}",
     "WATCH_SET_FAILED": "文件监听设置更新失败：{{detail}}",
-    "LOG_DIR_OPEN_FAILED": "打开日志目录失败：{{detail}}"
+    "LOG_DIR_OPEN_FAILED": "打开日志目录失败：{{detail}}",
+    "HISTORY_FILE_INVALID": "非法的归档文件名",
+    "HISTORY_FILE_NOT_FOUND": "归档文件不存在",
+    "HISTORY_READ_FAILED": "读取归档失败：{{detail}}"
   },
   "statusMsg": {
     "local": {
@@ -157,6 +187,10 @@
     "download": {
       "skipped_disabled": "下载开关已关闭，跳过下载",
       "write_failed": "写入本地文件失败：{{detail}}"
+    },
+    "rollback": {
+      "failed": "回滚失败：{{detail}}",
+      "verify_failed": "回滚上传回读校验失败：{{detail}}"
     }
   },
   "settings": {

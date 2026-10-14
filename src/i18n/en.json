@@ -5,6 +5,7 @@
   "menu": {
     "dashboard": "Dashboard",
     "mappings": "Mappings",
+    "history": "History",
     "accounts": "Accounts",
     "settings": "Settings"
   },
@@ -92,6 +93,32 @@
     "useLocal": "Overwrite remote with local",
     "useRemote": "Overwrite local with remote"
   },
+  "history": {
+    "title": "History",
+    "mapping": "Mapping",
+    "tabLocal": "Local archives",
+    "tabCommits": "Remote history",
+    "colTime": "Time",
+    "colSide": "Overwritten side",
+    "colReason": "Reason",
+    "colSize": "Size",
+    "colRevision": "Revision",
+    "colCommittedAt": "Committed at",
+    "sideLocal": "Local",
+    "sideRemote": "Remote",
+    "reasonDownload": "Overwritten by download",
+    "reasonUpload": "Overwritten by upload",
+    "reasonRollback": "Rollback",
+    "reasonLegacy": "Legacy archive",
+    "compare": "Compare",
+    "rollback": "Rollback",
+    "rollbackConfirmTitle": "Confirm rollback",
+    "rollbackConfirmBody": "This overwrites both the local and remote files and creates a new commit on the remote",
+    "rollbackOk": "Rolled back",
+    "previewHistorical": "Historical version",
+    "previewCurrent": "Current local",
+    "empty": "No history yet"
+  },
   "errors": {
     "ACCOUNT_NOT_FOUND": "Account not found",
     "ACCOUNT_BASE_URL_INVALID": "Opengist instance URL must start with http(s)://",
@@ -114,7 +141,10 @@
     "AUTOSTART_UPDATE_FAILED": "Failed to update launch-at-startup: {{detail}}",
     "PROVIDER_REQUEST_FAILED": "Gist service request failed: {{detail}}",
     "WATCH_SET_FAILED": "Failed to update file watching: {{detail}}",
-    "LOG_DIR_OPEN_FAILED": "Failed to open log directory: {{detail}}"
+    "LOG_DIR_OPEN_FAILED": "Failed to open log directory: {{detail}}",
+    "HISTORY_FILE_INVALID": "Invalid archive file name",
+    "HISTORY_FILE_NOT_FOUND": "Archive file not found",
+    "HISTORY_READ_FAILED": "Failed to read archive: {{detail}}"
   },
   "statusMsg": {
     "local": {
@@ -157,6 +187,10 @@
     "download": {
       "skipped_disabled": "Download is disabled; skipped",
       "write_failed": "Failed to write local file: {{detail}}"
+    },
+    "rollback": {
+      "failed": "Rollback failed: {{detail}}",
+      "verify_failed": "Rollback read-back verification failed: {{detail}}"
     }
   },
   "settings": {

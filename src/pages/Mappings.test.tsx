@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App as AntApp } from "antd";
+import { MemoryRouter } from "react-router-dom";
 import "../i18n";
 
 const mocks = vi.hoisted(() => ({
@@ -61,9 +62,11 @@ const openCreate = async () => {
 describe("Mappings page", () => {
   it("渲染映射列表：文件路径、gist id、方向开关状态", async () => {
     render(
-      <AntApp>
-        <Mappings />
-      </AntApp>,
+      <MemoryRouter>
+        <AntApp>
+          <Mappings />
+        </AntApp>
+      </MemoryRouter>,
     );
     expect(await screen.findByText("C:/notes/todo.md")).toBeInTheDocument();
     // 路径与 gist 渲染在同一单元格，文本被拆分，用 span 级正则匹配
@@ -73,9 +76,11 @@ describe("Mappings page", () => {
   it("选择文件后 gistFilename 默认联动为文件名", async () => {
     mocks.dialogOpen.mockResolvedValue("C:/notes/todo.md");
     render(
-      <AntApp>
-        <Mappings />
-      </AntApp>,
+      <MemoryRouter>
+        <AntApp>
+          <Mappings />
+        </AntApp>
+      </MemoryRouter>,
     );
     await openCreate();
     await userEvent.click(await screen.findByRole("button", { name: /选择文件/ }));
@@ -88,9 +93,11 @@ describe("Mappings page", () => {
       { id: "abc123", description: "工作笔记", updatedAt: "2026-10-13T08:00:00Z", files: ["todo.md"] },
     ]);
     render(
-      <AntApp>
-        <Mappings />
-      </AntApp>,
+      <MemoryRouter>
+        <AntApp>
+          <Mappings />
+        </AntApp>
+      </MemoryRouter>,
     );
     await openCreate();
     const accountSelect = await screen.findByLabelText(/账号/);
@@ -113,9 +120,11 @@ describe("Mappings page", () => {
     ]);
     mocks.mappingCreate.mockResolvedValue(mappingView.mapping);
     render(
-      <AntApp>
-        <Mappings />
-      </AntApp>,
+      <MemoryRouter>
+        <AntApp>
+          <Mappings />
+        </AntApp>
+      </MemoryRouter>,
     );
     await openCreate();
     await userEvent.click(await screen.findByRole("button", { name: /选择文件/ }));
@@ -145,9 +154,11 @@ describe("Mappings page", () => {
 
   it("空路径提交被前端拦截，不调用后端", async () => {
     render(
-      <AntApp>
-        <Mappings />
-      </AntApp>,
+      <MemoryRouter>
+        <AntApp>
+          <Mappings />
+        </AntApp>
+      </MemoryRouter>,
     );
     await openCreate();
     await userEvent.click(await screen.findByRole("button", { name: /^OK$|^确\s*定$/ }));
@@ -166,9 +177,11 @@ describe("Mappings page", () => {
       new IpcError("MAPPING_LOCAL_DUPLICATE", "该本地文件已被其他映射使用"),
     );
     render(
-      <AntApp>
-        <Mappings />
-      </AntApp>,
+      <MemoryRouter>
+        <AntApp>
+          <Mappings />
+        </AntApp>
+      </MemoryRouter>,
     );
     await openCreate();
     await userEvent.click(await screen.findByRole("button", { name: /选择文件/ }));
