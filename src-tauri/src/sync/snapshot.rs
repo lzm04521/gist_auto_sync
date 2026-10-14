@@ -7,17 +7,26 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// 被覆盖的一侧（历史归档用）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Side {
     Local,
     Remote,
 }
 
 impl Side {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Side::Local => "local",
             Side::Remote => "remote",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Side> {
+        match s {
+            "local" => Some(Side::Local),
+            "remote" => Some(Side::Remote),
+            _ => None,
         }
     }
 }
