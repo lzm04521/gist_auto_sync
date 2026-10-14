@@ -500,6 +500,12 @@ mod tests {
             self.set_file(gist_id, filename, content);
             self.get_gist(gist_id, Some(filename)).await
         }
+        async fn list_commits(&self, _gist_id: &str) -> Result<Vec<crate::provider::GistCommit>, ProviderError> {
+            Ok(vec![])
+        }
+        async fn get_file_at_revision(&self, _gist_id: &str, _rev: &str, _filename: &str) -> Result<String, ProviderError> {
+            Err(ProviderError::NotFound)
+        }
     }
 
     #[derive(Default)]
