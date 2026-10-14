@@ -11,6 +11,7 @@ use crate::model::{Account, Mapping};
 use crate::provider::{build_provider, GistProvider, ProviderError};
 use crate::secrets;
 use crate::sync::compare::{decide, normalize, sha256_hex, CompareInput, Decision};
+use crate::sync::history::HistoryReason;
 use crate::sync::snapshot::{SelfWriteGuard, Side, SnapshotState, SnapshotStore};
 
 /// 触发源
@@ -375,9 +376,13 @@ pub async fn run_sync_cycle_with_hint(
             emit_status(ctx, mapping, MappingStatus::Uploading, None, false);
             // 归档旧远端（远端文件不存在时无可归档）
             if let Some(remote) = &remote_raw {
-                let _ = ctx
-                    .snapshots
-                    .archive(&mapping.id, Side::Remote, remote, &ext_of(&mapping.gist_filename));
+                let _ = ctx.snapshots.archive(
+                    &mapping.id,
+                    Side::Remote,
+                    HistoryReason::Upload,
+                    remote,
+                    &ext_of(&mapping.gist_filename),
+                );
             }
             // 上传规范化内容（CRLF→LF），快照以回读为准
             let content = normalize(local_raw.as_deref().expect("Upload 分支必有本地内容"));
@@ -479,31 +484,19 @@ pub async fn run_sync_cycle_with_hint(
             emit_status(ctx, mapping, MappingStatus::Downloading, None, false);
             // 归档旧本地
             if let Some(local) = &local_raw {
-                let _ = ctx
-                    .snapshots
-                    .archive(&mapping.id, Side::Local, local, &ext_of(&mapping.local_path));
+                let _ = ctx.snapshots.archive(
+                    &mapping.id,
+                    Side::Local,
+                    HistoryReason::Download,
+                    local,
+                    &ext_of(&mapping.local_path),
+                );
             }
             // 写盘保留远端原始字节（spec §6.5）；原子替换（temp + rename 同目录同卷），
             // 写一半失败不会留下截断文件；temp 路径与映射路径不同，watcher 事件天然不命中映射
             let raw = remote_raw.clone().expect("Download 分支必有远端内容");
             tracing::info!("[{}] 下载 gist {}/{} → {}（{} 字节）", mapping.id, mapping.gist_id, mapping.gist_filename, mapping.local_path, raw.len());
-            let local = Path::new(&mapping.local_path);
-            let tmp_path = local.with_file_name(format!(
-                ".{}.gistsync.tmp",
-                local.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
-            ));
-            if let Err(e) = std::fs::write(&tmp_path, raw.as_bytes()) {
-                return emit_outcome(
-                    ctx,
-                    mapping,
-                    MappingStatus::Error,
-                    status_msg("download.write_failed", format!("写入本地文件失败: {e}")),
-                    false,
-                    None,
-                );
-            }
-            if let Err(e) = std::fs::rename(&tmp_path, local) {
-                let _ = std::fs::remove_file(&tmp_path);
+            if let Err(e) = write_local_atomic(&mapping.local_path, &raw) {
                 return emit_outcome(
                     ctx,
                     mapping,
@@ -550,14 +543,33 @@ fn rate_limit_hint(e: &ProviderError) -> Option<Duration> {
     }
 }
 
-fn ext_of(name: &str) -> String {
+pub(crate) fn ext_of(name: &str) -> String {
     Path::new(name)
         .extension()
         .map(|e| e.to_string_lossy().to_string())
         .unwrap_or_else(|| "txt".to_string())
 }
 
-fn emit_status(ctx: &SyncCtx, mapping: &Mapping, status: MappingStatus, message: Option<String>, synced: bool) -> MappingStatus {
+/// 本地原子写盘（temp + rename 同目录同卷）：下载与回滚共用。
+/// temp 路径与映射路径不同，watcher 事件天然不命中映射。
+pub(crate) fn write_local_atomic(local_path: &str, raw: &str) -> std::io::Result<()> {
+    let local = Path::new(local_path);
+    let tmp_path = local.with_file_name(format!(
+        ".{}.gistsync.tmp",
+        local
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default()
+    ));
+    std::fs::write(&tmp_path, raw.as_bytes())?;
+    if let Err(e) = std::fs::rename(&tmp_path, local) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    Ok(())
+}
+
+pub(crate) fn emit_status(ctx: &SyncCtx, mapping: &Mapping, status: MappingStatus, message: Option<String>, synced: bool) -> MappingStatus {
     ctx.sink.emit(StatusEvent {
         mapping_id: mapping.id.clone(),
         status,
@@ -684,6 +696,12 @@ mod tests {
             };
             self.set_file(gist_id, filename, &stored);
             self.get_gist(gist_id, Some(filename)).await
+        }
+        async fn list_commits(&self, _gist_id: &str) -> Result<Vec<crate::provider::GistCommit>, ProviderError> {
+            Ok(vec![])
+        }
+        async fn get_file_at_revision(&self, _gist_id: &str, _rev: &str, _filename: &str) -> Result<String, ProviderError> {
+            Err(ProviderError::NotFound)
         }
     }
 

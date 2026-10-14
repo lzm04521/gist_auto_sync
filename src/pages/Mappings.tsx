@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   App as AntApp,
   Button,
@@ -24,6 +25,7 @@ import type { Account, Mapping, MappingView } from "../types";
 export default function Mappings() {
   const { t } = useTranslation();
   const { message } = AntApp.useApp();
+  const navigate = useNavigate();
   const [views, setViews] = useState<MappingView[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(false);
@@ -114,6 +116,12 @@ export default function Mappings() {
                   checked={view.mapping.enabled}
                   onChange={(checked) => void toggleEnabled(view, checked)}
                 />
+                <Button
+                  size="small"
+                  onClick={() => navigate(`/history?mappingId=${view.mapping.id}`)}
+                >
+                  {t("menu.history")}
+                </Button>
                 <Button
                   size="small"
                   onClick={() => {

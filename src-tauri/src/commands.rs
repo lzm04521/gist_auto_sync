@@ -6,9 +6,10 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::config::ConfigStore;
 use crate::model::{Account, GlobalSettings, Mapping, ProviderKind};
-use crate::provider::{GistSummary, UserInfo};
+use crate::provider::{GistCommit, GistSummary, UserInfo};
 use crate::secrets;
 use crate::sync::engine::{MappingStatus, ProviderCache, StatusEvent, StatusSink, Trigger};
+use crate::sync::history::HistoryEntry;
 use crate::sync::service::{Engine, PersistedStatus};
 use crate::sync::snapshot::SnapshotStore;
 
@@ -502,6 +503,49 @@ pub fn sync_is_paused(state: State<'_, AppState>) -> bool {
     state.engine.is_global_paused()
 }
 
+/// 回滚到本地归档版本（本地与远端同时恢复）
+#[tauri::command]
+pub async fn history_rollback_local(
+    state: State<'_, AppState>,
+    mapping_id: String,
+    file_name: String,
+) -> Result<MappingStatus, String> {
+    if !crate::sync::history::is_archive_name(&file_name) {
+        return Err(ipc_err("HISTORY_FILE_INVALID", "非法的归档文件名"));
+    }
+    let account_id = {
+        let cfg = state.config.read();
+        let Some(m) = cfg.mappings.iter().find(|m| m.id == mapping_id) else {
+            return Err(ipc_err("MAPPING_NOT_FOUND", "映射不存在"));
+        };
+        m.account_id.clone()
+    };
+    if !state.config.read().accounts.iter().any(|a| a.id == account_id) {
+        return Err(ipc_err("ACCOUNT_NOT_FOUND", "账号不存在"));
+    }
+    Ok(state.engine.rollback_to_archive(&mapping_id, &file_name).await)
+}
+
+/// 回滚到远端 gist 指定版本（本地与远端同时恢复）
+#[tauri::command]
+pub async fn history_rollback_remote(
+    state: State<'_, AppState>,
+    mapping_id: String,
+    revision: String,
+) -> Result<MappingStatus, String> {
+    let account_id = {
+        let cfg = state.config.read();
+        let Some(m) = cfg.mappings.iter().find(|m| m.id == mapping_id) else {
+            return Err(ipc_err("MAPPING_NOT_FOUND", "映射不存在"));
+        };
+        m.account_id.clone()
+    };
+    if !state.config.read().accounts.iter().any(|a| a.id == account_id) {
+        return Err(ipc_err("ACCOUNT_NOT_FOUND", "账号不存在"));
+    }
+    Ok(state.engine.rollback_to_revision(&mapping_id, &revision).await)
+}
+
 // ── 全局设置 ─────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -633,6 +677,126 @@ impl AppState {
     }
 }
 
+// ── 历史与版本查询（V0.3）──────────────────────────────────────────────
+
+/// 对比预览：历史内容 + 当前本地内容（对比弹窗一次取全，形态同 conflict_preview）
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryPreview {
+    pub historical: String,
+    pub current_local: String,
+}
+
+/// 归档文件名安全校验（防路径穿越）：不合法 → HISTORY_FILE_INVALID
+fn ensure_archive_name(name: &str) -> Result<(), String> {
+    if crate::sync::history::is_archive_name(name) {
+        Ok(())
+    } else {
+        Err(ipc_err("HISTORY_FILE_INVALID", "非法的归档文件名"))
+    }
+}
+
+#[tauri::command]
+pub fn history_list(
+    state: State<'_, AppState>,
+    mapping_id: String,
+) -> Result<Vec<HistoryEntry>, String> {
+    let has = state.config.read().mappings.iter().any(|m| m.id == mapping_id);
+    if !has {
+        return Err(ipc_err("MAPPING_NOT_FOUND", "映射不存在"));
+    }
+    Ok(state.snapshots.history_list(&mapping_id))
+}
+
+#[tauri::command]
+pub async fn history_preview(
+    state: State<'_, AppState>,
+    mapping_id: String,
+    file_name: String,
+) -> Result<HistoryPreview, String> {
+    ensure_archive_name(&file_name)?;
+    let mapping = state
+        .config
+        .read()
+        .mappings
+        .into_iter()
+        .find(|m| m.id == mapping_id)
+        .ok_or_else(|| ipc_err("MAPPING_NOT_FOUND", "映射不存在"))?;
+    let historical = state.snapshots.read_archive(&mapping_id, &file_name).map_err(|e| {
+        match e.kind() {
+            std::io::ErrorKind::InvalidInput => ipc_err("HISTORY_FILE_INVALID", "非法的归档文件名"),
+            std::io::ErrorKind::NotFound => ipc_err("HISTORY_FILE_NOT_FOUND", "归档文件不存在"),
+            _ => ipc_err("HISTORY_READ_FAILED", format!("读取归档失败: {e}")),
+        }
+    })?;
+    // 本地文件不存在（Missing 态）→ 空串，对比弹窗该栏为空不报错（spec §6 边界）
+    let current_local = std::fs::read_to_string(&mapping.local_path).unwrap_or_default();
+    Ok(HistoryPreview { historical, current_local })
+}
+
+#[tauri::command]
+pub async fn gist_commit_list(
+    state: State<'_, AppState>,
+    mapping_id: String,
+) -> Result<Vec<GistCommit>, String> {
+    let mapping = state
+        .config
+        .read()
+        .mappings
+        .into_iter()
+        .find(|m| m.id == mapping_id)
+        .ok_or_else(|| ipc_err("MAPPING_NOT_FOUND", "映射不存在"))?;
+    let account = state
+        .config
+        .read()
+        .accounts
+        .into_iter()
+        .find(|a| a.id == mapping.account_id)
+        .ok_or_else(|| ipc_err("ACCOUNT_NOT_FOUND", "账号不存在"))?;
+    let provider = state
+        .ctx_providers()
+        .get_or_build(&account)
+        .await
+        .map_err(|e| ipc_err("PROVIDER_REQUEST_FAILED", e.to_string()))?;
+    provider
+        .list_commits(&mapping.gist_id)
+        .await
+        .map_err(|e| ipc_err("PROVIDER_REQUEST_FAILED", e.to_string()))
+}
+
+#[tauri::command]
+pub async fn gist_commit_preview(
+    state: State<'_, AppState>,
+    mapping_id: String,
+    revision: String,
+) -> Result<HistoryPreview, String> {
+    let mapping = state
+        .config
+        .read()
+        .mappings
+        .into_iter()
+        .find(|m| m.id == mapping_id)
+        .ok_or_else(|| ipc_err("MAPPING_NOT_FOUND", "映射不存在"))?;
+    let account = state
+        .config
+        .read()
+        .accounts
+        .into_iter()
+        .find(|a| a.id == mapping.account_id)
+        .ok_or_else(|| ipc_err("ACCOUNT_NOT_FOUND", "账号不存在"))?;
+    let provider = state
+        .ctx_providers()
+        .get_or_build(&account)
+        .await
+        .map_err(|e| ipc_err("PROVIDER_REQUEST_FAILED", e.to_string()))?;
+    let historical = provider
+        .get_file_at_revision(&mapping.gist_id, &revision, &mapping.gist_filename)
+        .await
+        .map_err(|e| ipc_err("PROVIDER_REQUEST_FAILED", e.to_string()))?;
+    let current_local = std::fs::read_to_string(&mapping.local_path).unwrap_or_default();
+    Ok(HistoryPreview { historical, current_local })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,5 +820,16 @@ mod tests {
             normalize_stored_path("D:/ghost dir/f.md"),
             "D:\\ghost dir\\f.md"
         );
+    }
+
+    /// V0.3：归档文件名安全校验（防路径穿越），命令层错误码 HISTORY_FILE_INVALID
+    #[test]
+    fn ensure_archive_name_rejects_traversal_and_accepts_valid() {
+        for bad in ["..\\config.json", "a/b-local.md", "xx-local.md"] {
+            let err = ensure_archive_name(bad).unwrap_err();
+            assert!(err.contains("HISTORY_FILE_INVALID"), "bad={bad}, err={err}");
+        }
+        assert!(ensure_archive_name("20260101000000000-local.md").is_ok());
+        assert!(ensure_archive_name("20260101000000000-remote.txt").is_ok());
     }
 }

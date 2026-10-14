@@ -4,7 +4,10 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{check_response, GistDetail, GistFile, GistProvider, GistSummary, ProviderError, UserInfo};
+use super::{
+    check_response, GistCommit, GistDetail, GistFile, GistProvider, GistSummary, ProviderError,
+    UserInfo,
+};
 
 /// Opengist REST API 实现。
 /// 端点映射（核对自 https://opengist.io/docs/api ，v1.15.2）：
@@ -75,6 +78,13 @@ struct OgFile {
 #[derive(Debug, Deserialize)]
 struct OgCommit {
     version: String,
+}
+
+/// GET /api/gists/{uuid}/commits 响应项（openapi.yaml GistCommit）
+#[derive(Debug, Deserialize)]
+struct OgCommitEntry {
+    version: String,
+    committed_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -217,6 +227,80 @@ impl GistProvider for OpengistProvider {
         self.backfill_raw_content(&mut detail, sha.as_deref(), Some(filename))
             .await?;
         Ok(detail)
+    }
+
+    async fn list_commits(&self, gist_id: &str) -> Result<Vec<GistCommit>, ProviderError> {
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut page: u32 = 1;
+        loop {
+            let url = format!(
+                "{}/api/gists/{gist_id}/commits?per_page=100&page={page}",
+                self.base_url
+            );
+            let resp = self
+                .request(reqwest::Method::GET, url, None)
+                .send()
+                .await?;
+            let commits: Vec<OgCommitEntry> = check_response(resp).await?.json().await?;
+            let is_full_page = commits.len() == 100;
+            for c in commits {
+                if seen.insert(c.version.clone()) {
+                    out.push(GistCommit {
+                        revision: c.version,
+                        committed_at: c.committed_at,
+                    });
+                }
+            }
+            if !is_full_page {
+                break;
+            }
+            if page >= super::MAX_LIST_PAGES {
+                tracing::warn!(
+                    "list_commits 分页达安全上限 {} 页，提前停止（服务端疑似异常）",
+                    super::MAX_LIST_PAGES
+                );
+                break;
+            }
+            page += 1;
+        }
+        Ok(out)
+    }
+
+    async fn get_file_at_revision(
+        &self,
+        gist_id: &str,
+        rev: &str,
+        filename: &str,
+    ) -> Result<String, ProviderError> {
+        let resp = self
+            .request(
+                reqwest::Method::GET,
+                format!("{}/api/gists/{gist_id}/{rev}", self.base_url),
+                None,
+            )
+            .send()
+            .await?;
+        let g = check_response(resp).await?.json::<OgGist>().await?;
+        let file = g
+            .files
+            .into_iter()
+            .find(|(key, f)| f.filename.as_deref() == Some(filename) || key == filename)
+            .ok_or(ProviderError::NotFound)?
+            .1;
+        // content 缺失或被截断 → 回退 raw 端点（带指定版本）
+        if let Some(c) = file.content.filter(|_| !file.truncated) {
+            return Ok(c);
+        }
+        let raw_url = format!(
+            "{}/api/gists/{gist_id}/files/{rev}/{filename}",
+            self.base_url
+        );
+        let resp = self
+            .request(reqwest::Method::GET, raw_url, None)
+            .send()
+            .await?;
+        Ok(check_response(resp).await?.text().await?)
     }
 }
 
@@ -513,5 +597,151 @@ mod tests {
             .await;
         let err = provider(&server).verify_token().await.unwrap_err();
         assert!(matches!(err, ProviderError::ApiDisabled), "got: {err:?}");
+    }
+
+    // ── 历史能力：commits 与指定版本内容 ──
+
+    fn commit_json(version: &str, at: &str) -> serde_json::Value {
+        json!({
+            "version": version,
+            "committed_at": at,
+            "author": { "email": "a@b.c", "name": "a" },
+            "change_status": { "additions": 1, "deletions": 0, "total": 1 }
+        })
+    }
+
+    #[tokio::test]
+    async fn list_commits_maps_version_and_committed_at() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/gists/uuid1/commits"))
+            .and(query_param("per_page", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                commit_json("deadbeef01", "2026-10-13T08:00:00Z"),
+                commit_json("deadbeef02", "2026-10-12T08:00:00Z")
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let commits = provider(&server).list_commits("uuid1").await.unwrap();
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].revision, "deadbeef01");
+        assert_eq!(
+            commits[0].committed_at,
+            chrono::Utc.with_ymd_and_hms(2026, 10, 13, 8, 0, 0).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn list_commits_paginates_until_short_page() {
+        let server = MockServer::start().await;
+        let page1: Vec<_> = (0..100)
+            .map(|i| commit_json(&format!("dead{i:07}"), "2026-10-13T08:00:00Z"))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/api/gists/uuid1/commits"))
+            .and(query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!(page1)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/gists/uuid1/commits"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                commit_json("dead-last", "2026-10-01T08:00:00Z")
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let commits = provider(&server).list_commits("uuid1").await.unwrap();
+        assert_eq!(commits.len(), 101, "两页后不满页即停止");
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn list_commits_stops_at_max_pages_on_runaway_server() {
+        // 异常服务端恒返满页：分页循环必须在安全上限处停止（防死循环）
+        let server = MockServer::start().await;
+        let full_page: Vec<_> = (0..100)
+            .map(|i| commit_json(&format!("dead{i:07}"), "2026-10-13T08:00:00Z"))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/api/gists/uuid1/commits"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!(full_page)))
+            .expect(crate::provider::MAX_LIST_PAGES as u64)
+            .mount(&server)
+            .await;
+        let commits = provider(&server).list_commits("uuid1").await.unwrap();
+        assert_eq!(commits.len(), 100, "同页内容去重后应恰为 100 条");
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn get_file_at_revision_returns_embedded_content() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/gists/uuid1/deadbeef01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gist_json(
+                "uuid1",
+                "版本1",
+                "notes.md",
+                Some("v1 content"),
+                false,
+                true,
+            )))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let content = provider(&server)
+            .get_file_at_revision("uuid1", "deadbeef01", "notes.md")
+            .await
+            .unwrap();
+        assert_eq!(content, "v1 content");
+        server.verify().await; // content 直接可用，不应再发 raw 请求
+    }
+
+    #[tokio::test]
+    async fn get_file_at_revision_truncated_content_falls_back_to_raw() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/gists/uuid1/deadbeef01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gist_json(
+                "uuid1",
+                "大文件",
+                "big.md",
+                None,
+                true,
+                true,
+            )))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/gists/uuid1/files/deadbeef01/big.md"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("full raw content"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let content = provider(&server)
+            .get_file_at_revision("uuid1", "deadbeef01", "big.md")
+            .await
+            .unwrap();
+        assert_eq!(content, "full raw content");
+    }
+
+    #[tokio::test]
+    async fn get_file_at_revision_unknown_revision_maps_not_found() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/gists/uuid1/nosuchrev"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("gist not found"))
+            .mount(&server)
+            .await;
+        let err = provider(&server)
+            .get_file_at_revision("uuid1", "nosuchrev", "notes.md")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::NotFound), "got: {err:?}");
     }
 }

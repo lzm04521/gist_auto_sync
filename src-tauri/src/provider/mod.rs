@@ -49,6 +49,15 @@ pub struct GistDetail {
     pub files: Vec<GistFile>,
 }
 
+/// gist 提交历史项（远端历史 Tab 用）
+/// GitHub：`version` 字段；Opengist：`version`（SHA，openapi.yaml GistCommit）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GistCommit {
+    pub revision: String,
+    pub committed_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum ProviderError {
     #[error("网络错误: {0}")]
@@ -162,6 +171,15 @@ pub trait GistProvider: Send + Sync {
     ) -> Result<GistDetail, ProviderError>;
     /// 更新 gist 内单个文件（PATCH 只带该文件一个 key）；文件不存在则新增
     async fn update_file(&self, gist_id: &str, filename: &str, content: &str) -> Result<GistDetail, ProviderError>;
+    /// 列 gist 提交历史（最新在前，分页与页数安全上限同 list_gists）
+    async fn list_commits(&self, gist_id: &str) -> Result<Vec<GistCommit>, ProviderError>;
+    /// 取指定版本 gist 中目标文件内容（content 缺失/截断时回退 raw）
+    async fn get_file_at_revision(
+        &self,
+        gist_id: &str,
+        rev: &str,
+        filename: &str,
+    ) -> Result<String, ProviderError>;
 }
 
 /// 按账号类型构造 provider

@@ -9,7 +9,13 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::model::Mapping;
-use crate::sync::engine::{run_sync_cycle_with_hint, MappingStatus, SyncCtx, Trigger};
+use crate::sync::compare::{normalize, sha256_hex};
+use crate::sync::engine::{
+    emit_status, ext_of, run_sync_cycle_with_hint, status_msg, write_local_atomic, MappingStatus,
+    SyncCtx, Trigger,
+};
+use crate::sync::history::HistoryReason;
+use crate::sync::snapshot::{Side, SnapshotState, SyncDirection};
 use crate::sync::watcher::{DebounceWindow, FileWatcher};
 
 /// 持久化状态（statuses.json），重启后恢复 Conflict/Error/Missing
@@ -415,6 +421,253 @@ impl Engine {
             tracing::warn!("持久化同步状态失败: {e}");
         }
     }
+
+    // ── 回滚（V0.3）：本地归档与远端 revision 共用一条统一路径（spec §5）──
+
+    /// 回滚到本地归档版本：本地与远端同时恢复，冲突解除
+    pub async fn rollback_to_archive(self: &Arc<Self>, mapping_id: &str, file_name: &str) -> MappingStatus {
+        self.rollback_inner(
+            mapping_id,
+            RollbackSource::LocalArchive(file_name.to_string()),
+        )
+        .await
+    }
+
+    /// 回滚到远端 gist 指定版本：本地与远端同时恢复，冲突解除
+    pub async fn rollback_to_revision(self: &Arc<Self>, mapping_id: &str, revision: &str) -> MappingStatus {
+        self.rollback_inner(
+            mapping_id,
+            RollbackSource::RemoteRevision(revision.to_string()),
+        )
+        .await
+    }
+
+    async fn rollback_inner(self: &Arc<Self>, mapping_id: &str, source: RollbackSource) -> MappingStatus {
+        // 1. 前置：映射与账号必须存在（缺失 → Error，零副作用）
+        let found = {
+            let cfg = self.ctx.config.read();
+            cfg.mappings
+                .iter()
+                .find(|m| m.id == mapping_id)
+                .cloned()
+                .map(|m| {
+                    let account = cfg
+                        .accounts
+                        .iter()
+                        .find(|a| a.id == m.account_id)
+                        .cloned();
+                    (m, account)
+                })
+        };
+        let (mapping, account) = match found {
+            Some((m, Some(a))) => (m, a),
+            Some((_, None)) => {
+                self.record_status(
+                    mapping_id,
+                    MappingStatus::Error,
+                    status_msg("account.not_found", "账号不存在"),
+                );
+                return MappingStatus::Error;
+            }
+            None => {
+                self.record_status(
+                    mapping_id,
+                    MappingStatus::Error,
+                    status_msg("mapping.not_found", "映射不存在"),
+                );
+                return MappingStatus::Error;
+            }
+        };
+
+        // 2. per-mapping 互斥：回滚视为手动类触发，排队等待进行中的同步（spec §5.4）
+        let lock = self
+            .busy
+            .lock()
+            .expect("busy lock poisoned")
+            .entry(mapping.id.clone())
+            .or_default()
+            .clone();
+        let _guard = lock.lock().await;
+
+        // 3. provider（token 加载失败 → Error，零副作用）
+        let Ok(provider) = self.ctx.providers.get_or_build(&account).await else {
+            self.record_status(
+                &mapping.id,
+                MappingStatus::Error,
+                status_msg("rollback.failed", "访问令牌加载失败"),
+            );
+            return MappingStatus::Error;
+        };
+
+        // 4. 取内容（失败 → Error，零副作用）
+        let content = match &source {
+            RollbackSource::LocalArchive(file_name) => {
+                match self.ctx.snapshots.read_archive(&mapping.id, file_name) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!("[{}] 回滚读取归档失败: {e}", mapping.id);
+                        self.record_status(
+                            &mapping.id,
+                            MappingStatus::Error,
+                            status_msg("rollback.failed", format!("读取归档失败: {e}")),
+                        );
+                        return MappingStatus::Error;
+                    }
+                }
+            }
+            RollbackSource::RemoteRevision(rev) => {
+                match provider.get_file_at_revision(&mapping.gist_id, rev, &mapping.gist_filename).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!("[{}] 回滚取历史版本失败: {e}", mapping.id);
+                        self.record_status(
+                            &mapping.id,
+                            MappingStatus::Error,
+                            status_msg("rollback.failed", format!("取历史版本失败: {e}")),
+                        );
+                        return MappingStatus::Error;
+                    }
+                }
+            }
+        };
+
+        // 5. 归档当前本地内容（reason=rollback，历史链不断；Missing 态跳过）
+        if let Ok(current) = std::fs::read_to_string(&mapping.local_path) {
+            let _ = self.ctx.snapshots.archive(
+                &mapping.id,
+                Side::Local,
+                HistoryReason::Rollback,
+                &current,
+                &ext_of(&mapping.local_path),
+            );
+        }
+
+        // 6. 本地原子写盘（保留归档时的原始字节）+ 自写抑制登记
+        if let Err(e) = write_local_atomic(&mapping.local_path, &content) {
+            self.record_status(
+                &mapping.id,
+                MappingStatus::Error,
+                status_msg("rollback.failed", format!("写入本地文件失败: {e}")),
+            );
+            return MappingStatus::Error;
+        }
+        let hash = sha256_hex(&normalize(&content));
+        if let Some(m) = std::fs::metadata(&mapping.local_path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+        {
+            self.ctx.guard.register(&mapping.id, &hash, m);
+        }
+
+        // 7. 上传远端（规范化内容）+ 回读校验（模式同上传分支）
+        let normalized = normalize(&content);
+        tracing::info!("[{}] 回滚 {} → 本地 + gist {}/{}", mapping.id, file_hint(&source), mapping.gist_id, mapping.gist_filename);
+        match provider
+            .update_file(&mapping.gist_id, &mapping.gist_filename, &normalized)
+            .await
+        {
+            Ok(new_detail) => {
+                let sent_hash = sha256_hex(&normalized);
+                let readback_ok = |c: &str| sha256_hex(&normalize(c)) == sent_hash;
+                let mut verified = new_detail
+                    .files
+                    .iter()
+                    .find(|f| f.filename == mapping.gist_filename)
+                    .and_then(|f| f.content.clone())
+                    .filter(|c| readback_ok(c));
+                if verified.is_none() {
+                    tracing::warn!("[{}] 回滚上传回读缺失或不一致，重新拉取远端核对", mapping.id);
+                    match provider
+                        .get_gist(&mapping.gist_id, Some(&mapping.gist_filename))
+                        .await
+                    {
+                        Ok(d) => {
+                            verified = d
+                                .files
+                                .iter()
+                                .find(|f| f.filename == mapping.gist_filename)
+                                .and_then(|f| f.content.clone())
+                                .filter(|c| readback_ok(c));
+                        }
+                        Err(e) => {
+                            self.record_status(
+                                &mapping.id,
+                                MappingStatus::Error,
+                                status_msg("rollback.verify_failed", format!("回滚上传回读校验失败: {e}")),
+                            );
+                            return MappingStatus::Error;
+                        }
+                    }
+                }
+                let Some(back) = verified else {
+                    tracing::error!("[{}] 回滚上传回读校验失败：远端内容与发送不一致，不落快照", mapping.id);
+                    self.record_status(
+                        &mapping.id,
+                        MappingStatus::Error,
+                        status_msg("rollback.verify_failed", "远端内容与发送不一致"),
+                    );
+                    return MappingStatus::Error;
+                };
+                let state = SnapshotState {
+                    last_synced_hash: sha256_hex(&normalize(&back)),
+                    last_synced_at: Utc::now(),
+                    last_direction: Some(SyncDirection::Upload),
+                    remote_updated_at: Some(new_detail.updated_at),
+                };
+                if let Err(e) = self.ctx.snapshots.save(&mapping.id, &state) {
+                    self.record_status(
+                        &mapping.id,
+                        MappingStatus::Error,
+                        status_msg("snapshot.save_failed", format!("保存快照失败: {e}")),
+                    );
+                    return MappingStatus::Error;
+                }
+                tracing::info!("[{}] 回滚完成", mapping.id);
+                emit_status(&self.ctx, &mapping, MappingStatus::Idle, None, true);
+                self.record_status(&mapping.id, MappingStatus::Idle, None);
+                MappingStatus::Idle
+            }
+            // 上传失败不回滚本地：本地已是回滚内容、基准未更新。
+            // 清除自写抑制并比照自动触发失败安排退避重试——否则抑制表会吞掉
+            // 防抖中的 watcher 事件（Error 被洗白为 Idle、两边静默分叉，spec §5.2）
+            Err(e) => {
+                tracing::error!("[{}] 回滚上传失败: {e}", mapping.id);
+                self.ctx.guard.clear(&mapping.id);
+                self.record_status(
+                    &mapping.id,
+                    MappingStatus::Error,
+                    status_msg("rollback.failed", e.to_string()),
+                );
+                // Poll 语义重试：本地 ≠ 基准 → 重新上传；持续失败沿用既有退避链
+                self.schedule_retry(
+                    mapping.id.clone(),
+                    1,
+                    match &e {
+                        crate::provider::ProviderError::RateLimited { retry_after } => {
+                            *retry_after
+                        }
+                        _ => None,
+                    },
+                );
+                MappingStatus::Error
+            }
+        }
+    }
+}
+
+/// 回滚内容来源
+enum RollbackSource {
+    /// 本地归档文件名
+    LocalArchive(String),
+    /// 远端 gist 版本号
+    RemoteRevision(String),
+}
+
+fn file_hint(source: &RollbackSource) -> &str {
+    match source {
+        RollbackSource::LocalArchive(_) => "本地归档",
+        RollbackSource::RemoteRevision(_) => "远端版本",
+    }
 }
 
 /// Windows 路径大小写不敏感比较
@@ -438,6 +691,10 @@ mod tests {
         calls: Mutex<Vec<&'static str>>,
         list_since: Mutex<Vec<Option<DateTime<Utc>>>>,
         fail_list: Mutex<bool>,
+        /// update_file 恒失败（模拟上传网络故障）
+        fail_update: Mutex<bool>,
+        /// get_file_at_revision 的固定返回（None → NotFound）
+        revision_content: Mutex<Option<String>>,
     }
 
     impl FakeProvider {
@@ -447,6 +704,8 @@ mod tests {
                 calls: Mutex::new(vec![]),
                 list_since: Mutex::new(vec![]),
                 fail_list: Mutex::new(false),
+                fail_update: Mutex::new(false),
+                revision_content: Mutex::new(None),
             }
         }
         fn set_file(&self, gist_id: &str, filename: &str, content: &str) {
@@ -497,8 +756,18 @@ mod tests {
         }
         async fn update_file(&self, gist_id: &str, filename: &str, content: &str) -> Result<GistDetail, ProviderError> {
             self.calls.lock().unwrap().push("update");
+            if *self.fail_update.lock().unwrap() {
+                return Err(ProviderError::Network("update boom".into()));
+            }
             self.set_file(gist_id, filename, content);
             self.get_gist(gist_id, Some(filename)).await
+        }
+        async fn list_commits(&self, _gist_id: &str) -> Result<Vec<crate::provider::GistCommit>, ProviderError> {
+            Ok(vec![])
+        }
+        async fn get_file_at_revision(&self, _gist_id: &str, _rev: &str, _filename: &str) -> Result<String, ProviderError> {
+            self.calls.lock().unwrap().push("revision");
+            self.revision_content.lock().unwrap().clone().ok_or(ProviderError::NotFound)
         }
     }
 
@@ -810,6 +1079,228 @@ mod tests {
         assert_eq!(
             f.engine.debounce_window.load(Ordering::Relaxed),
             30
+        );
+    }
+
+    // ── 回滚（V0.3）：本地归档与远端 revision 共用统一路径 ──
+
+    use crate::sync::history::{is_archive_name, list_entries, HistoryReason};
+    use crate::sync::snapshot::{Side, SyncDirection};
+
+    /// 预置一个内容为 "A" 的本地归档，返回归档文件名
+    fn archive_a(f: &Fixture) -> String {
+        let p = f
+            .engine
+            .ctx
+            .snapshots
+            .archive("m1", Side::Local, HistoryReason::Upload, "A", "md")
+            .unwrap();
+        p.file_name().unwrap().to_string_lossy().to_string()
+    }
+
+    fn remote_content(f: &Fixture) -> String {
+        f.fake
+            .files
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(g, fl, _)| g == "gist1" && fl == "notes.md")
+            .map(|(_, _, c)| c.clone())
+            .unwrap()
+    }
+
+    fn archive_dir(f: &Fixture) -> std::path::PathBuf {
+        f.dir.path().join("snapshots").join("m1")
+    }
+
+    #[tokio::test]
+    async fn rollback_to_archive_restores_both_sides() {
+        let f = fixture("B", "B", Some("B"));
+        let arch = archive_a(&f);
+
+        let status = f.engine.rollback_to_archive("m1", &arch).await;
+        assert_eq!(status, MappingStatus::Idle);
+
+        // 本地 == A
+        assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "A");
+        // 远端 PATCH 载荷 == normalize(A)
+        assert_eq!(remote_content(&f), "A");
+        // 快照基准更新为 A、方向 Upload
+        let snap = f.engine.ctx.snapshots.load("m1").unwrap();
+        assert_eq!(snap.last_synced_hash, sha("A"));
+        assert_eq!(snap.last_direction, Some(SyncDirection::Upload));
+        // 抑制表命中（mtime+hash），watcher 不应把写盘当成本地变更
+        let mtime = fs::metadata(&f.local_path).unwrap().modified().unwrap();
+        assert!(f.engine.ctx.guard.should_suppress("m1", &sha("A"), mtime));
+        // 回滚前的内容 B 被归档，且 reason=rollback
+        let entries = list_entries(&archive_dir(&f));
+        let rb = entries
+            .iter()
+            .find(|e| e.reason == HistoryReason::Rollback)
+            .expect("应存在 reason=rollback 的归档");
+        assert_eq!(
+            fs::read_to_string(archive_dir(&f).join(&rb.file)).unwrap(),
+            "B"
+        );
+    }
+
+    #[tokio::test]
+    async fn rollback_to_revision_restores_both_sides() {
+        let f = fixture("B", "B", Some("B"));
+        *f.fake.revision_content.lock().unwrap() = Some("A".into());
+
+        let status = f.engine.rollback_to_revision("m1", "rev-aaa").await;
+        assert_eq!(status, MappingStatus::Idle);
+
+        assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "A");
+        assert_eq!(remote_content(&f), "A");
+        let snap = f.engine.ctx.snapshots.load("m1").unwrap();
+        assert_eq!(snap.last_synced_hash, sha("A"));
+        assert_eq!(snap.last_direction, Some(SyncDirection::Upload));
+        // 回滚前本地 B 被归档（reason=rollback）
+        let entries = list_entries(&archive_dir(&f));
+        assert!(entries.iter().any(|e| e.reason == HistoryReason::Rollback));
+    }
+
+    #[tokio::test]
+    async fn rollback_missing_archive_zero_side_effects() {
+        let f = fixture("B", "B", Some("B"));
+
+        let status = f
+            .engine
+            .rollback_to_archive("m1", "20260101000000000-local.md")
+            .await;
+        assert_eq!(status, MappingStatus::Error);
+
+        // 本地/远端/快照均未动
+        assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "B");
+        assert_eq!(remote_content(&f), "B");
+        let snap = f.engine.ctx.snapshots.load("m1").unwrap();
+        assert_eq!(snap.last_synced_hash, sha("B"));
+        // 无新归档
+        let has_archive = fs::read_dir(archive_dir(&f))
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .any(|e| is_archive_name(&e.file_name().to_string_lossy()))
+            })
+            .unwrap_or(false);
+        assert!(!has_archive, "取内容失败不应产生任何归档");
+    }
+
+    #[tokio::test]
+    async fn rollback_upload_failure_keeps_local_and_old_snapshot() {
+        let f = fixture("B", "B", Some("B"));
+        let arch = archive_a(&f);
+        *f.fake.fail_update.lock().unwrap() = true;
+
+        let status = f.engine.rollback_to_archive("m1", &arch).await;
+        assert_eq!(status, MappingStatus::Error);
+        // 本地已是回滚内容 A（不回滚本地）；上传失败后抑制表已清除（终审修复：
+        // 保留登记会吞掉 watcher 事件、Error 被洗白为 Idle，详见新回归测试）
+        assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "A");
+        let mtime = fs::metadata(&f.local_path).unwrap().modified().unwrap();
+        assert!(!f.engine.ctx.guard.should_suppress("m1", &sha("A"), mtime));
+        // 快照 hash 仍是旧值 B（未更新，留给重试链收敛）
+        let snap = f.engine.ctx.snapshots.load("m1").unwrap();
+        assert_eq!(snap.last_synced_hash, sha("B"));
+    }
+
+    #[tokio::test]
+    async fn rollback_resolves_conflict() {
+        let f = fixture("local v2", "remote v2", Some("base"));
+        let status = f.engine.run_one("m1", Trigger::Poll).await;
+        assert_eq!(status, MappingStatus::Conflict);
+
+        let arch = archive_a(&f);
+        let status = f.engine.rollback_to_archive("m1", &arch).await;
+        assert_eq!(status, MappingStatus::Idle);
+        // 持久化状态恢复 Idle、消息清空
+        let s = f.engine.statuses_snapshot();
+        assert_eq!(s.get("m1").map(|x| x.status), Some(MappingStatus::Idle));
+        assert!(s.get("m1").and_then(|x| x.message.as_deref()).is_none());
+        // 两边拉齐为 A
+        assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "A");
+        assert_eq!(remote_content(&f), "A");
+    }
+
+    #[tokio::test]
+    async fn rollback_works_when_disabled_and_paused() {
+        let f = fixture("B", "B", Some("B"));
+        // 禁用映射 + 全局暂停均不拦截（与手动同步同规则，spec §5.3）
+        f.engine
+            .ctx
+            .config
+            .update(|c| {
+                if let Some(m) = c.mappings.iter_mut().find(|m| m.id == "m1") {
+                    m.enabled = false;
+                }
+            })
+            .unwrap();
+        f.engine.set_global_paused(true);
+
+        let arch = archive_a(&f);
+        let status = f.engine.rollback_to_archive("m1", &arch).await;
+        assert_eq!(status, MappingStatus::Idle);
+        assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "A");
+        assert_eq!(remote_content(&f), "A");
+    }
+
+    /// 终审修复：上传失败后抑制表必须清除，否则 watcher 事件被吞、Error 被洗白为
+    /// Idle、本地/远端静默分叉（spec §5.2 承诺的"防抖后重传"实际不会发生）
+    #[tokio::test]
+    async fn rollback_upload_failure_watcher_event_retries_not_washed_to_idle() {
+        let f = fixture("B", "B", Some("B"));
+        let arch = archive_a(&f);
+        *f.fake.fail_update.lock().unwrap() = true;
+
+        let status = f.engine.rollback_to_archive("m1", &arch).await;
+        assert_eq!(status, MappingStatus::Error);
+
+        // 抑制表已清除：watcher 事件不被当作自写吞掉
+        let mtime = fs::metadata(&f.local_path).unwrap().modified().unwrap();
+        assert!(
+            !f.engine.ctx.guard.should_suppress("m1", &sha("A"), mtime),
+            "上传失败后不应抑制 watcher 事件"
+        );
+
+        // 防抖后的 watcher 事件：本地 A ≠ 快照 B → 重传（仍失败）→ 状态保持 Error 而非 Idle
+        f.engine.dispatch_settled(f.local_path.clone()).await;
+        let s = f.engine.statuses_snapshot();
+        assert_eq!(
+            s.get("m1").map(|x| x.status),
+            Some(MappingStatus::Error),
+            "watcher 重传失败不应把 Error 洗白为 Idle"
+        );
+
+        // 网络恢复后再来一次（模拟退避重试/下轮事件）：收敛为 Idle，两边拉齐 A
+        *f.fake.fail_update.lock().unwrap() = false;
+        let status = f.engine.run_one("m1", Trigger::Poll).await;
+        assert_eq!(status, MappingStatus::Idle);
+        assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "A");
+        assert_eq!(remote_content(&f), "A");
+        let snap = f.engine.ctx.snapshots.load("m1").unwrap();
+        assert_eq!(snap.last_synced_hash, sha("A"));
+    }
+
+    /// Review Focus #4：本地文件不存在（Missing 态）回滚——跳过归档、直接创建、两边拉齐
+    #[tokio::test]
+    async fn rollback_creates_missing_local_file() {
+        let f = fixture("B", "B", Some("B"));
+        let arch = archive_a(&f);
+        fs::remove_file(&f.local_path).unwrap();
+
+        let status = f.engine.rollback_to_archive("m1", &arch).await;
+        assert_eq!(status, MappingStatus::Idle);
+        // 本地文件被创建且内容为回滚版本
+        assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "A");
+        assert_eq!(remote_content(&f), "A");
+        let snap = f.engine.ctx.snapshots.load("m1").unwrap();
+        assert_eq!(snap.last_synced_hash, sha("A"));
+        // 本地不存在 → 不产生 rollback 归档
+        let entries = list_entries(&archive_dir(&f));
+        assert!(
+            !entries.iter().any(|e| e.reason == HistoryReason::Rollback),
+            "Missing 态回滚不应归档，实际: {entries:?}"
         );
     }
 }
