@@ -105,6 +105,7 @@ describe("Mappings page", () => {
     expect(await screen.findByText(/工作笔记/, { selector: ".ant-select-item-option-content" })).toBeInTheDocument();
   });
 
+  // 表单全链路交互耗时最长（常态 ~10s），高负载下会撞默认 20s 上限，单独放宽
   it("提交载荷 camelCase 且含方向开关", async () => {
     mocks.dialogOpen.mockResolvedValue("C:/notes/todo.md");
     mocks.gistListForAccount.mockResolvedValue([
@@ -140,7 +141,7 @@ describe("Mappings page", () => {
       downloadEnabled: false,
       enabled: true,
     });
-  });
+  }, 40_000);
 
   it("空路径提交被前端拦截，不调用后端", async () => {
     render(
