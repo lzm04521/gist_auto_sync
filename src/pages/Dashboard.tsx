@@ -24,8 +24,6 @@ export function statusColor(status: MappingStatus): string {
     case "uploading":
     case "downloading":
       return "blue";
-    case "paused":
-      return "default";
     default:
       return "green";
   }

@@ -26,8 +26,7 @@
     "downloading": "下载中",
     "conflict": "冲突",
     "error": "错误",
-    "missing": "文件缺失",
-    "paused": "已暂停"
+    "missing": "文件缺失"
   },
   "accounts": {
     "name": "名称",

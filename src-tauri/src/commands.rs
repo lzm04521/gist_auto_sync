@@ -81,10 +81,7 @@ pub fn account_list(state: State<'_, AppState>) -> Vec<Account> {
 
 #[tauri::command]
 pub fn account_create(state: State<'_, AppState>, input: AccountInput) -> Result<Account, String> {
-    let id = uuid::Uuid::new_v4().to_string();
-    let token_ref = secrets::token_ref_for(&id);
-    secrets::save_token(&token_ref, &input.token).map_err(|e| e.to_string())?;
-
+    // 输入校验先于凭据写入，非法输入不产生 keyring 残留
     let base_url = match input.provider {
         ProviderKind::Github => "https://api.github.com".to_string(),
         ProviderKind::Opengist => {
@@ -95,6 +92,10 @@ pub fn account_create(state: State<'_, AppState>, input: AccountInput) -> Result
             url
         }
     };
+    let id = uuid::Uuid::new_v4().to_string();
+    let token_ref = secrets::token_ref_for(&id);
+    secrets::save_token(&token_ref, &input.token).map_err(|e| e.to_string())?;
+
     let account = Account {
         id,
         name: input.name.trim().to_string(),
@@ -102,10 +103,11 @@ pub fn account_create(state: State<'_, AppState>, input: AccountInput) -> Result
         base_url,
         token_ref,
     };
-    state
-        .config
-        .update(|c| c.accounts.push(account.clone()))
-        .map_err(|e| e.to_string())?;
+    if let Err(e) = state.config.update(|c| c.accounts.push(account.clone())) {
+        // 配置落盘失败：清理已写入的凭据，避免 keyring 孤儿条目（best-effort，失败不掩盖原错误）
+        let _ = secrets::delete_token(account.token_ref.as_str());
+        return Err(e.to_string());
+    }
     Ok(account)
 }
 
@@ -175,6 +177,7 @@ pub fn account_delete(state: State<'_, AppState>, id: String, force: bool) -> Re
     }
     for m in &mappings {
         let _ = state.snapshots.remove_mapping(&m.id);
+        state.engine.remove_status(&m.id);
     }
     state
         .config
@@ -389,6 +392,7 @@ pub fn mapping_delete(state: State<'_, AppState>, id: String) -> Result<(), Stri
         .update(|c| c.mappings.retain(|m| m.id != id))
         .map_err(|e| e.to_string())?;
     let _ = state.snapshots.remove_mapping(&id);
+    state.engine.remove_status(&id);
     state.engine.apply_watch_set().map_err(|e| e.to_string())?;
     Ok(())
 }

@@ -12,13 +12,26 @@ use crate::model::Mapping;
 use crate::sync::engine::{run_sync_cycle_with_hint, MappingStatus, SyncCtx, Trigger};
 use crate::sync::watcher::{DebounceWindow, FileWatcher};
 
-/// 持久化状态（statuses.json），重启后恢复 Conflict/Error/Missing/Paused
+/// 持久化状态（statuses.json），重启后恢复 Conflict/Error/Missing
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedStatus {
     pub status: MappingStatus,
     pub message: Option<String>,
     pub last_synced_at: Option<DateTime<Utc>>,
+}
+
+/// statuses.json 的文件结构：全局暂停标记 + 各映射状态。
+/// 旧版本文件是裸的 `{<mapping_id>: PersistedStatus}` map，加载时兼容回退。
+/// deny_unknown_fields：旧格式（顶层是 mapping id）在此解析失败，才能触发回退分支，
+/// 否则 serde(default) 会把它静默解析成空 mappings、丢掉全部旧状态。
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StatusesFile {
+    #[serde(default)]
+    paused: bool,
+    #[serde(default)]
+    mappings: HashMap<String, PersistedStatus>,
 }
 
 /// 引擎服务：装配 watcher 防抖、轮询、重试队列与状态持久化
@@ -39,12 +52,21 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// 构造并加载 statuses.json（不存在 → 空）
+    /// 构造并加载 statuses.json（不存在 → 空）。
+    /// 新格式 {"paused":bool,"mappings":{..}}；旧格式为裸 map（paused 视为 false）。
     pub fn new(ctx: Arc<SyncCtx>, statuses_path: PathBuf) -> std::io::Result<Self> {
-        let statuses = std::fs::read_to_string(&statuses_path)
+        let (paused, statuses) = std::fs::read_to_string(&statuses_path)
             .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default();
+            .and_then(|t| {
+                serde_json::from_str::<StatusesFile>(&t)
+                    .map(|f| (f.paused, f.mappings))
+                    .or_else(|_| {
+                        serde_json::from_str::<HashMap<String, PersistedStatus>>(&t)
+                            .map(|m| (false, m))
+                    })
+                    .ok()
+            })
+            .unwrap_or((false, HashMap::new()));
         let (debounce_in, debounce_rx) = mpsc::channel(256);
         let (settled_tx, settled_rx) = mpsc::channel(256);
         let debounce_window = Arc::new(AtomicU64::new(
@@ -54,7 +76,7 @@ impl Engine {
             ctx,
             statuses: Mutex::new(statuses),
             statuses_path,
-            paused: AtomicBool::new(false),
+            paused: AtomicBool::new(paused),
             retry_attempts: Mutex::new(HashMap::new()),
             last_poll: Mutex::new(HashMap::new()),
             watcher: Mutex::new(None),
@@ -232,8 +254,9 @@ impl Engine {
 
     /// 内部：执行 + 记录 + 自动触发失败时安排退避重试（限流错误优先用 Retry-After）
     async fn run_mapping_tracked(self: &Arc<Self>, m: &Mapping, trigger: Trigger) -> MappingStatus {
-        let (status, rate_hint) = run_sync_cycle_with_hint(&self.ctx, m, trigger).await;
-        self.record_status(&m.id, status, None);
+        let outcome = run_sync_cycle_with_hint(&self.ctx, m, trigger).await;
+        self.record_status(&m.id, outcome.status, outcome.message);
+        let status = outcome.status;
         let is_auto = matches!(trigger, Trigger::LocalSettled | Trigger::Poll);
         if is_auto && status == MappingStatus::Error {
             let attempt = {
@@ -242,7 +265,7 @@ impl Engine {
                 map.insert(m.id.clone(), next);
                 next
             };
-            self.schedule_retry(m.id.clone(), attempt, rate_hint);
+            self.schedule_retry(m.id.clone(), attempt, outcome.rate_hint);
         } else if status == MappingStatus::Idle {
             self.retry_attempts
                 .lock()
@@ -268,6 +291,11 @@ impl Engine {
 
     pub fn set_global_paused(&self, paused: bool) {
         self.paused.store(paused, Ordering::SeqCst);
+        // 全局暂停随 statuses.json 持久化，重启后保持暂停
+        let map = self.statuses.lock().expect("statuses lock poisoned").clone();
+        if let Err(e) = self.persist_statuses(&map) {
+            tracing::warn!("持久化全局暂停状态失败: {e}");
+        }
     }
 
     pub fn is_global_paused(&self) -> bool {
@@ -306,7 +334,11 @@ impl Engine {
     }
 
     fn persist_statuses(&self, map: &HashMap<String, PersistedStatus>) -> std::io::Result<()> {
-        let json = serde_json::to_string_pretty(map)
+        let file = StatusesFile {
+            paused: self.paused.load(Ordering::SeqCst),
+            mappings: map.clone(),
+        };
+        let json = serde_json::to_string_pretty(&file)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         let tmp = self.statuses_path.with_extension("json.tmp");
         std::fs::write(&tmp, json)?;
@@ -315,10 +347,18 @@ impl Engine {
 
     fn record_status(&self, mapping_id: &str, status: MappingStatus, message: Option<String>) {
         let mut map = self.statuses.lock().expect("statuses lock poisoned");
-        let last_synced_at = map
+        let (prev_message, last_synced_at) = map
             .get(mapping_id)
-            .and_then(|s| s.last_synced_at);
+            .map(|s| (s.message.clone(), s.last_synced_at))
+            .unwrap_or((None, None));
         let synced = matches!(status, MappingStatus::Idle);
+        // Idle = 恢复正常，清空历史消息；其余状态 message 为 None 时沿用旧值
+        // （中间态/轮询对账不携带消息，避免把冲突原因等 Tooltip 信息冲掉）
+        let message = if synced {
+            None
+        } else {
+            message.or(prev_message)
+        };
         map.insert(
             mapping_id.to_string(),
             PersistedStatus {
@@ -329,6 +369,16 @@ impl Engine {
         );
         // 注意：锁内直接落盘（复用已持有的 map，避免重入死锁）
         if let Err(e) = self.persist_statuses(&map) {
+            tracing::warn!("持久化同步状态失败: {e}");
+        }
+    }
+
+    /// 删除映射的持久化状态（映射删除时级联清理，避免 statuses.json 残条）
+    pub fn remove_status(&self, mapping_id: &str) {
+        let mut map = self.statuses.lock().expect("statuses lock poisoned");
+        if map.remove(mapping_id).is_some()
+            && let Err(e) = self.persist_statuses(&map)
+        {
             tracing::warn!("持久化同步状态失败: {e}");
         }
     }
@@ -532,6 +582,80 @@ mod tests {
         let reloaded = Engine::new(ctx, f.statuses_path.clone()).unwrap();
         let statuses = reloaded.statuses_snapshot();
         assert_eq!(statuses.get("m1").map(|s| s.status), Some(MappingStatus::Conflict));
+    }
+
+    #[tokio::test]
+    async fn conflict_message_persists_and_clears_on_resolve() {
+        let f = fixture("local v2", "remote v2", Some("base"));
+        let status = f.engine.run_one("m1", Trigger::Poll).await;
+        assert_eq!(status, MappingStatus::Conflict);
+        // 冲突原因应随状态持久化（此前恒被 None 覆盖丢失）
+        let s = f.engine.statuses_snapshot();
+        assert!(
+            s.get("m1").and_then(|x| x.message.as_deref()).unwrap_or_default().contains("未同步修改"),
+            "冲突消息应持久化，实际: {:?}",
+            s.get("m1").map(|x| x.message.clone())
+        );
+
+        // 重新构造（模拟重启）：消息仍在
+        let ctx = f.engine.ctx.clone();
+        let reloaded = Engine::new(ctx, f.statuses_path.clone()).unwrap();
+        let s = reloaded.statuses_snapshot();
+        assert!(s["m1"].message.is_some(), "重启后冲突消息应保留");
+
+        // 人工解决（远端覆盖本地）→ Idle 后消息清空
+        let reloaded = Arc::new(reloaded);
+        let status = reloaded.run_one("m1", Trigger::ManualDownload).await;
+        assert_eq!(status, MappingStatus::Idle);
+        let s = reloaded.statuses_snapshot();
+        assert!(s["m1"].message.is_none(), "恢复正常后应清空历史消息");
+    }
+
+    #[tokio::test]
+    async fn global_pause_persists_across_restart() {
+        let f = fixture("local", "remote", None);
+        f.engine.set_global_paused(true);
+        assert!(f.statuses_path.exists(), "暂停状态应触发 statuses.json 落盘");
+
+        let ctx = f.engine.ctx.clone();
+        let reloaded = Engine::new(ctx, f.statuses_path.clone()).unwrap();
+        assert!(reloaded.is_global_paused(), "重启后应保持全局暂停");
+
+        reloaded.set_global_paused(false);
+        let reloaded2 = Engine::new(reloaded.ctx.clone(), f.statuses_path.clone()).unwrap();
+        assert!(!reloaded2.is_global_paused(), "恢复后重启应不再暂停");
+    }
+
+    #[tokio::test]
+    async fn legacy_statuses_format_loads() {
+        // 旧版裸 map 格式：加载不炸、映射状态保留、paused 视为 false
+        let f = fixture("local v2", "remote v2", Some("base"));
+        let status = f.engine.run_one("m1", Trigger::Poll).await;
+        assert_eq!(status, MappingStatus::Conflict);
+
+        // 手工改写为旧格式（裸 map）
+        let snapshot = f.engine.statuses_snapshot();
+        std::fs::write(&f.statuses_path, serde_json::to_string(&snapshot).unwrap()).unwrap();
+
+        let ctx = f.engine.ctx.clone();
+        let reloaded = Engine::new(ctx, f.statuses_path.clone()).unwrap();
+        assert!(!reloaded.is_global_paused());
+        let s = reloaded.statuses_snapshot();
+        assert_eq!(s.get("m1").map(|x| x.status), Some(MappingStatus::Conflict));
+    }
+
+    #[tokio::test]
+    async fn remove_status_drops_entry_from_disk() {
+        let f = fixture("local v2", "remote v2", Some("base"));
+        let status = f.engine.run_one("m1", Trigger::Poll).await;
+        assert_eq!(status, MappingStatus::Conflict);
+
+        f.engine.remove_status("m1");
+        assert!(!f.engine.statuses_snapshot().contains_key("m1"));
+
+        let ctx = f.engine.ctx.clone();
+        let reloaded = Engine::new(ctx, f.statuses_path.clone()).unwrap();
+        assert!(!reloaded.statuses_snapshot().contains_key("m1"), "删除后磁盘上不应有残条");
     }
 
     #[tokio::test]

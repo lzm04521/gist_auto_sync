@@ -26,8 +26,7 @@
     "downloading": "Downloading",
     "conflict": "Conflict",
     "error": "Error",
-    "missing": "Missing",
-    "paused": "Paused"
+    "missing": "Missing"
   },
   "accounts": {
     "name": "Name",
