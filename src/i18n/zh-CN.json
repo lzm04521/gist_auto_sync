@@ -115,6 +115,7 @@
     "rollbackConfirmTitle": "确认回滚",
     "rollbackConfirmBody": "将同时覆盖本地与远端文件，并在远端产生一次新提交",
     "rollbackOk": "回滚成功",
+    "rollbackFailed": "回滚失败，请查看映射状态",
     "previewHistorical": "历史版本",
     "previewCurrent": "当前本地",
     "empty": "暂无历史"

@@ -120,6 +120,16 @@ describe("History page", () => {
     expect(await screen.findByText("归档文件不存在")).toBeInTheDocument();
   });
 
+  it("引擎级回滚失败（返回 error 状态）不弹成功提示", async () => {
+    mocks.historyRollbackLocal.mockResolvedValue("error");
+    renderPage();
+    await screen.findByText("20261014123045123-local.md");
+    await userEvent.click(screen.getAllByRole("button", { name: /回 滚|回滚/ })[0]);
+    await userEvent.click(await screen.findByRole("button", { name: /确 定|确定/ }));
+    expect(await screen.findByText("回滚失败，请查看映射状态")).toBeInTheDocument();
+    expect(screen.queryByText("回滚成功")).not.toBeInTheDocument();
+  });
+
   it("远端历史 Tab 渲染短版本号（前 7 位）", async () => {
     renderPage();
     await screen.findByText("20261014123045123-local.md");

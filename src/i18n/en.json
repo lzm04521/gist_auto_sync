@@ -115,6 +115,7 @@
     "rollbackConfirmTitle": "Confirm rollback",
     "rollbackConfirmBody": "This overwrites both the local and remote files and creates a new commit on the remote",
     "rollbackOk": "Rolled back",
+    "rollbackFailed": "Rollback failed; check the mapping status",
     "previewHistorical": "Historical version",
     "previewCurrent": "Current local",
     "empty": "No history yet"

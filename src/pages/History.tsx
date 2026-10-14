@@ -129,8 +129,13 @@ export default function History() {
       cancelText: t("common.cancel"),
       onOk: async () => {
         try {
-          await rollback();
-          void message.success(t("history.rollbackOk"));
+          const status = await rollback();
+          if (status === "error") {
+            // 引擎级失败已记入映射状态（rollback.failed 等）：不弹成功，提示查看状态
+            void message.error(t("history.rollbackFailed"));
+          } else {
+            void message.success(t("history.rollbackOk"));
+          }
           if (mappingId) await reloadLists(mappingId);
         } catch (e) {
           void message.error(ipcErrorMessage(e, t));

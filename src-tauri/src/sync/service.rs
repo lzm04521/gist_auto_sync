@@ -627,14 +627,27 @@ impl Engine {
                 self.record_status(&mapping.id, MappingStatus::Idle, None);
                 MappingStatus::Idle
             }
-            // 上传失败不回滚本地：本地已是回滚内容、抑制表已登记、基准未更新，
-            // watcher 防抖后按"本地变更"重新上传（自然重试路径，最终一致，spec §5.2）
+            // 上传失败不回滚本地：本地已是回滚内容、基准未更新。
+            // 清除自写抑制并比照自动触发失败安排退避重试——否则抑制表会吞掉
+            // 防抖中的 watcher 事件（Error 被洗白为 Idle、两边静默分叉，spec §5.2）
             Err(e) => {
                 tracing::error!("[{}] 回滚上传失败: {e}", mapping.id);
+                self.ctx.guard.clear(&mapping.id);
                 self.record_status(
                     &mapping.id,
                     MappingStatus::Error,
                     status_msg("rollback.failed", e.to_string()),
+                );
+                // Poll 语义重试：本地 ≠ 基准 → 重新上传；持续失败沿用既有退避链
+                self.schedule_retry(
+                    mapping.id.clone(),
+                    1,
+                    match &e {
+                        crate::provider::ProviderError::RateLimited { retry_after } => {
+                            *retry_after
+                        }
+                        _ => None,
+                    },
                 );
                 MappingStatus::Error
             }
@@ -1182,11 +1195,12 @@ mod tests {
 
         let status = f.engine.rollback_to_archive("m1", &arch).await;
         assert_eq!(status, MappingStatus::Error);
-        // 本地已是回滚内容 A（不回滚本地），抑制表已登记
+        // 本地已是回滚内容 A（不回滚本地）；上传失败后抑制表已清除（终审修复：
+        // 保留登记会吞掉 watcher 事件、Error 被洗白为 Idle，详见新回归测试）
         assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "A");
         let mtime = fs::metadata(&f.local_path).unwrap().modified().unwrap();
-        assert!(f.engine.ctx.guard.should_suppress("m1", &sha("A"), mtime));
-        // 快照 hash 仍是旧值 B（未更新，留给 watcher 重试）
+        assert!(!f.engine.ctx.guard.should_suppress("m1", &sha("A"), mtime));
+        // 快照 hash 仍是旧值 B（未更新，留给重试链收敛）
         let snap = f.engine.ctx.snapshots.load("m1").unwrap();
         assert_eq!(snap.last_synced_hash, sha("B"));
     }
@@ -1229,5 +1243,64 @@ mod tests {
         assert_eq!(status, MappingStatus::Idle);
         assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "A");
         assert_eq!(remote_content(&f), "A");
+    }
+
+    /// 终审修复：上传失败后抑制表必须清除，否则 watcher 事件被吞、Error 被洗白为
+    /// Idle、本地/远端静默分叉（spec §5.2 承诺的"防抖后重传"实际不会发生）
+    #[tokio::test]
+    async fn rollback_upload_failure_watcher_event_retries_not_washed_to_idle() {
+        let f = fixture("B", "B", Some("B"));
+        let arch = archive_a(&f);
+        *f.fake.fail_update.lock().unwrap() = true;
+
+        let status = f.engine.rollback_to_archive("m1", &arch).await;
+        assert_eq!(status, MappingStatus::Error);
+
+        // 抑制表已清除：watcher 事件不被当作自写吞掉
+        let mtime = fs::metadata(&f.local_path).unwrap().modified().unwrap();
+        assert!(
+            !f.engine.ctx.guard.should_suppress("m1", &sha("A"), mtime),
+            "上传失败后不应抑制 watcher 事件"
+        );
+
+        // 防抖后的 watcher 事件：本地 A ≠ 快照 B → 重传（仍失败）→ 状态保持 Error 而非 Idle
+        f.engine.dispatch_settled(f.local_path.clone()).await;
+        let s = f.engine.statuses_snapshot();
+        assert_eq!(
+            s.get("m1").map(|x| x.status),
+            Some(MappingStatus::Error),
+            "watcher 重传失败不应把 Error 洗白为 Idle"
+        );
+
+        // 网络恢复后再来一次（模拟退避重试/下轮事件）：收敛为 Idle，两边拉齐 A
+        *f.fake.fail_update.lock().unwrap() = false;
+        let status = f.engine.run_one("m1", Trigger::Poll).await;
+        assert_eq!(status, MappingStatus::Idle);
+        assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "A");
+        assert_eq!(remote_content(&f), "A");
+        let snap = f.engine.ctx.snapshots.load("m1").unwrap();
+        assert_eq!(snap.last_synced_hash, sha("A"));
+    }
+
+    /// Review Focus #4：本地文件不存在（Missing 态）回滚——跳过归档、直接创建、两边拉齐
+    #[tokio::test]
+    async fn rollback_creates_missing_local_file() {
+        let f = fixture("B", "B", Some("B"));
+        let arch = archive_a(&f);
+        fs::remove_file(&f.local_path).unwrap();
+
+        let status = f.engine.rollback_to_archive("m1", &arch).await;
+        assert_eq!(status, MappingStatus::Idle);
+        // 本地文件被创建且内容为回滚版本
+        assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "A");
+        assert_eq!(remote_content(&f), "A");
+        let snap = f.engine.ctx.snapshots.load("m1").unwrap();
+        assert_eq!(snap.last_synced_hash, sha("A"));
+        // 本地不存在 → 不产生 rollback 归档
+        let entries = list_entries(&archive_dir(&f));
+        assert!(
+            !entries.iter().any(|e| e.reason == HistoryReason::Rollback),
+            "Missing 态回滚不应归档，实际: {entries:?}"
+        );
     }
 }
