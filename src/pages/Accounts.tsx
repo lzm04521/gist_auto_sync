@@ -76,7 +76,8 @@ export default function Accounts() {
   };
 
   const submit = async () => {
-    const values = await form.validateFields();
+    const values = await form.validateFields().catch(() => null);
+    if (!values) return; // 校验失败：antd 已在字段下方展示错误提示
     const input: AccountInput = {
       name: values.name,
       provider: values.provider,

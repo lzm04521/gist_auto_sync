@@ -70,9 +70,13 @@ export default function Dashboard() {
             : v,
         ),
       );
+    }).catch((e) => {
+      // 非 Tauri 环境（浏览器/测试）无事件通道；订阅失败降级为手动刷新
+      console.warn("status event subscribe failed:", e);
+      return null;
     });
     return () => {
-      void unlisten.then((fn) => fn());
+      void unlisten.then((fn) => fn?.());
     };
   }, []);
 

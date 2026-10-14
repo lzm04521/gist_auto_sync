@@ -43,7 +43,8 @@ export default function Settings() {
   };
 
   const save = async () => {
-    const values = await form.validateFields();
+    const values = await form.validateFields().catch(() => null);
+    if (!values) return; // 校验失败：antd 已在字段下方展示错误提示
     try {
       const settings: GlobalSettings = {
         debounceSeconds: values.debounceSeconds,
