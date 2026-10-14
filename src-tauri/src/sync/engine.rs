@@ -11,6 +11,7 @@ use crate::model::{Account, Mapping};
 use crate::provider::{build_provider, GistProvider, ProviderError};
 use crate::secrets;
 use crate::sync::compare::{decide, normalize, sha256_hex, CompareInput, Decision};
+use crate::sync::history::HistoryReason;
 use crate::sync::snapshot::{SelfWriteGuard, Side, SnapshotState, SnapshotStore};
 
 /// 触发源
@@ -375,9 +376,13 @@ pub async fn run_sync_cycle_with_hint(
             emit_status(ctx, mapping, MappingStatus::Uploading, None, false);
             // 归档旧远端（远端文件不存在时无可归档）
             if let Some(remote) = &remote_raw {
-                let _ = ctx
-                    .snapshots
-                    .archive(&mapping.id, Side::Remote, remote, &ext_of(&mapping.gist_filename));
+                let _ = ctx.snapshots.archive(
+                    &mapping.id,
+                    Side::Remote,
+                    HistoryReason::Upload,
+                    remote,
+                    &ext_of(&mapping.gist_filename),
+                );
             }
             // 上传规范化内容（CRLF→LF），快照以回读为准
             let content = normalize(local_raw.as_deref().expect("Upload 分支必有本地内容"));
@@ -479,9 +484,13 @@ pub async fn run_sync_cycle_with_hint(
             emit_status(ctx, mapping, MappingStatus::Downloading, None, false);
             // 归档旧本地
             if let Some(local) = &local_raw {
-                let _ = ctx
-                    .snapshots
-                    .archive(&mapping.id, Side::Local, local, &ext_of(&mapping.local_path));
+                let _ = ctx.snapshots.archive(
+                    &mapping.id,
+                    Side::Local,
+                    HistoryReason::Download,
+                    local,
+                    &ext_of(&mapping.local_path),
+                );
             }
             // 写盘保留远端原始字节（spec §6.5）；原子替换（temp + rename 同目录同卷），
             // 写一半失败不会留下截断文件；temp 路径与映射路径不同，watcher 事件天然不命中映射
