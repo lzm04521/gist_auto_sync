@@ -13,6 +13,8 @@ use gist_auto_sync_lib::provider::{GistProvider, ProviderError};
 use gist_auto_sync_lib::provider::github::GithubProvider;
 use gist_auto_sync_lib::sync::compare::{normalize, sha256_hex};
 use gist_auto_sync_lib::sync::engine::{run_sync_cycle, MappingStatus, ProviderCache, StatusEvent, StatusSink, SyncCtx, Trigger};
+use gist_auto_sync_lib::sync::history::HistoryReason;
+use gist_auto_sync_lib::sync::service::Engine;
 use gist_auto_sync_lib::sync::snapshot::{SelfWriteGuard, SnapshotStore, SyncDirection};
 
 #[derive(Default)]
@@ -239,4 +241,76 @@ async fn e2e_github_auth_error() {
     let provider = GithubProvider::new(format!("{token}invalid"));
     let err = provider.verify_token().await.unwrap_err();
     assert!(matches!(err, ProviderError::Auth), "got: {err:?}");
+}
+
+/// V0.3 回滚 + commits 历史 roundtrip：上传 v1/v2 → commits ≥2 → 回滚到 v1 归档
+/// → 本地/远端拉齐为 v1，commits 增至 +1。
+#[tokio::test]
+#[ignore = "需要真实 GitHub token：设置 GISTSYNC_E2E_TOKEN 后 --ignored 运行"]
+async fn rollback_commits_roundtrip() {
+    let (ctx, mut mapping, dir) = setup().await;
+    let ctx = Arc::new(ctx);
+    let gist_id = create_fixture_gist().await;
+    let _fixture = GistGuard(gist_id.clone());
+    mapping.gist_id = gist_id.clone();
+    let engine = Arc::new(Engine::new(ctx.clone(), dir.path().join("statuses.json")).unwrap());
+
+    // 1. 首次对账建立基准；本地改 v1 → 上传（新 commit）
+    let status = patient_cycle(&ctx, &mapping, Trigger::Poll).await;
+    assert_eq!(status, MappingStatus::Idle, "首次对账应 Idle");
+    std::fs::write(&mapping.local_path, "e2e v1\n").unwrap();
+    let status = patient_cycle(&ctx, &mapping, Trigger::ManualUpload).await;
+    assert_eq!(status, MappingStatus::Idle);
+    assert_eq!(remote_content(&gist_id).await, "e2e v1\n");
+
+    // 2. 本地改 v2 → 上传（覆盖前远端 v1 自动归档，reason=upload）
+    std::fs::write(&mapping.local_path, "e2e v2\n").unwrap();
+    let status = patient_cycle(&ctx, &mapping, Trigger::ManualUpload).await;
+    assert_eq!(status, MappingStatus::Idle);
+    assert_eq!(remote_content(&gist_id).await, "e2e v2\n");
+
+    // 3. commits 历史 ≥ 2
+    let token = std::env::var("GISTSYNC_E2E_TOKEN").unwrap();
+    let provider = GithubProvider::new(token);
+    let commits_before = provider.list_commits(&gist_id).await.expect("list_commits 失败");
+    assert!(commits_before.len() >= 2, "commits={}", commits_before.len());
+
+    // 4. 定位 v1 归档（上传 v2 时被归档的远端旧内容）
+    let v1_entry = ctx
+        .snapshots
+        .history_list(&mapping.id)
+        .into_iter()
+        .find(|e| {
+            e.reason == HistoryReason::Upload
+                && ctx
+                    .snapshots
+                    .read_archive(&mapping.id, &e.file)
+                    .is_ok_and(|c| c == "e2e v1\n")
+        })
+        .expect("应存在内容为 v1 的上传归档");
+
+    // 5. 回滚到 v1：本地与远端同时恢复（网络瞬断重试，同 patient_cycle 模式）
+    let mut status = engine.rollback_to_archive(&mapping.id, &v1_entry.file).await;
+    for attempt in 1..=3 {
+        if status != MappingStatus::Error {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(2u64.pow(attempt))).await;
+        status = engine.rollback_to_archive(&mapping.id, &v1_entry.file).await;
+    }
+    assert_eq!(status, MappingStatus::Idle, "回滚应成功");
+    assert_eq!(
+        std::fs::read_to_string(&mapping.local_path).unwrap(),
+        "e2e v1\n",
+        "本地应恢复为 v1"
+    );
+    assert_eq!(remote_content(&gist_id).await, "e2e v1\n", "远端应恢复为 v1");
+
+    // 6. 回滚在远端产生一次新提交
+    let commits_after = provider.list_commits(&gist_id).await.expect("list_commits 失败");
+    assert_eq!(
+        commits_after.len(),
+        commits_before.len() + 1,
+        "回滚应恰好新增一条 commit"
+    );
 }
