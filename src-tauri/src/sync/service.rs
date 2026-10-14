@@ -42,6 +42,9 @@ pub struct Engine {
     paused: AtomicBool,
     retry_attempts: Mutex<HashMap<String, u32>>,
     last_poll: Mutex<HashMap<String, DateTime<Utc>>>,
+    /// per-mapping 同步互斥：自动触发（watcher/轮询/重试）try_lock 跳过进行中的映射，
+    /// 手动触发排队等待（用户点击的覆盖操作必须执行）
+    busy: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     watcher: Mutex<Option<FileWatcher>>,
     /// 防抖管道入口（常驻，watcher 重建只换生产端）：notify 事件 → 防抖 → settled_tx
     debounce_in: mpsc::Sender<PathBuf>,
@@ -79,6 +82,7 @@ impl Engine {
             paused: AtomicBool::new(paused),
             retry_attempts: Mutex::new(HashMap::new()),
             last_poll: Mutex::new(HashMap::new()),
+            busy: Mutex::new(HashMap::new()),
             watcher: Mutex::new(None),
             debounce_in,
             debounce_rx: Mutex::new(Some(debounce_rx)),
@@ -254,6 +258,30 @@ impl Engine {
 
     /// 内部：执行 + 记录 + 自动触发失败时安排退避重试（限流错误优先用 Retry-After）
     async fn run_mapping_tracked(self: &Arc<Self>, m: &Mapping, trigger: Trigger) -> MappingStatus {
+        // per-mapping 互斥：手动覆盖操作排队等待；自动触发遇到进行中的同步直接跳过本轮
+        // （watcher 下次事件 / 轮询下轮 / 重试队列都有补偿，无需重复请求）
+        let lock = self
+            .busy
+            .lock()
+            .expect("busy lock poisoned")
+            .entry(m.id.clone())
+            .or_default()
+            .clone();
+        let _guard = match trigger {
+            Trigger::ManualUpload | Trigger::ManualDownload => lock.lock().await,
+            _ => match lock.try_lock() {
+                Ok(g) => g,
+                Err(_) => {
+                    tracing::debug!("[{}] 同步进行中，跳过本轮自动触发", m.id);
+                    return self
+                        .statuses_snapshot()
+                        .get(&m.id)
+                        .map(|s| s.status)
+                        .unwrap_or(MappingStatus::Idle);
+                }
+            },
+        };
+
         let outcome = run_sync_cycle_with_hint(&self.ctx, m, trigger).await;
         self.record_status(&m.id, outcome.status, outcome.message);
         let status = outcome.status;
@@ -376,6 +404,11 @@ impl Engine {
     /// 删除映射的持久化状态（映射删除时级联清理，避免 statuses.json 残条）
     pub fn remove_status(&self, mapping_id: &str) {
         let mut map = self.statuses.lock().expect("statuses lock poisoned");
+        // 同步清理互斥锁条目，映射不再回来
+        self.busy
+            .lock()
+            .expect("busy lock poisoned")
+            .remove(mapping_id);
         if map.remove(mapping_id).is_some()
             && let Err(e) = self.persist_statuses(&map)
         {
@@ -446,7 +479,11 @@ mod tests {
                 .map(|id| GistSummary { id, description: None, updated_at: Utc::now(), files: vec![] })
                 .collect())
         }
-        async fn get_gist(&self, gist_id: &str) -> Result<GistDetail, ProviderError> {
+        async fn get_gist(
+            &self,
+            gist_id: &str,
+            _wanted_file: Option<&str>,
+        ) -> Result<GistDetail, ProviderError> {
             self.calls.lock().unwrap().push("get");
             let files = self
                 .files
@@ -461,7 +498,7 @@ mod tests {
         async fn update_file(&self, gist_id: &str, filename: &str, content: &str) -> Result<GistDetail, ProviderError> {
             self.calls.lock().unwrap().push("update");
             self.set_file(gist_id, filename, content);
-            self.get_gist(gist_id).await
+            self.get_gist(gist_id, Some(filename)).await
         }
     }
 
@@ -656,6 +693,65 @@ mod tests {
         let ctx = f.engine.ctx.clone();
         let reloaded = Engine::new(ctx, f.statuses_path.clone()).unwrap();
         assert!(!reloaded.statuses_snapshot().contains_key("m1"), "删除后磁盘上不应有残条");
+    }
+
+    #[tokio::test]
+    async fn auto_trigger_skipped_while_mapping_busy() {
+        let f = fixture("local v2", "base", Some("base"));
+        // 占住 m1 的同步互斥锁，模拟一次进行中的同步
+        let lock = f
+            .engine
+            .busy
+            .lock()
+            .unwrap()
+            .entry("m1".into())
+            .or_default()
+            .clone();
+        let _guard = lock.lock().await;
+
+        let calls_before = f.fake.calls.lock().unwrap().len();
+        let status = f.engine.run_one("m1", Trigger::Poll).await;
+        assert_eq!(status, MappingStatus::Idle, "跳过时返回当前持久化状态");
+        assert_eq!(
+            f.fake.calls.lock().unwrap().len(),
+            calls_before,
+            "自动触发在同步进行中不应重复执行"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_trigger_queues_behind_busy_lock() {
+        let f = fixture("local v2", "base", Some("base"));
+        let lock = f
+            .engine
+            .busy
+            .lock()
+            .unwrap()
+            .entry("m1".into())
+            .or_default()
+            .clone();
+        let _guard = lock.lock().await;
+
+        let engine = f.engine.clone();
+        let task = tokio::spawn(async move { engine.run_one("m1", Trigger::ManualUpload).await });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!task.is_finished(), "手动触发应排队等待而非被跳过");
+
+        drop(_guard);
+        let status = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("释放锁后手动触发应完成")
+            .unwrap();
+        assert_eq!(status, MappingStatus::Idle);
+        let remote = f
+            .fake
+            .files
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(g, _, _)| g == "gist1")
+            .map(|(_, _, c)| c.clone());
+        assert_eq!(remote.as_deref(), Some("local v2"), "排队的手动上传最终应执行");
     }
 
     #[tokio::test]

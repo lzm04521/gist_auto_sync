@@ -554,7 +554,7 @@ pub async fn conflict_preview(
         .await
         .map_err(|e| e.to_string())?;
     let detail = provider
-        .get_gist(&mapping.gist_id)
+        .get_gist(&mapping.gist_id, Some(&mapping.gist_filename))
         .await
         .map_err(|e| e.to_string())?;
     let remote = detail

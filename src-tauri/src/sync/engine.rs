@@ -189,8 +189,11 @@ pub async fn run_sync_cycle_with_hint(
         }
     };
 
-    // ── 远端读取
-    let detail = match provider.get_gist(&mapping.gist_id).await {
+    // ── 远端读取（只回补目标文件的 content，避免为 gist 内无关文件拉 raw）
+    let detail = match provider
+        .get_gist(&mapping.gist_id, Some(&mapping.gist_filename))
+        .await
+    {
         Ok(d) => d,
         Err(e) => {
             return emit_outcome(
@@ -307,12 +310,52 @@ pub async fn run_sync_cycle_with_hint(
                 .await
             {
                 Ok(new_detail) => {
-                    let back = new_detail
+                    // 回读校验（spec：快照以回读为准）：响应 content 缺失或不一致时再取一次远端核对
+                    let sent_hash = sha256_hex(&content);
+                    let readback_ok = |c: &str| sha256_hex(&normalize(c)) == sent_hash;
+                    let mut verified = new_detail
                         .files
                         .iter()
                         .find(|f| f.filename == mapping.gist_filename)
                         .and_then(|f| f.content.clone())
-                        .unwrap_or(content);
+                        .filter(|c| readback_ok(c));
+                    if verified.is_none() {
+                        tracing::warn!("[{}] 上传响应回读缺失或不一致，重新拉取远端核对", mapping.id);
+                        match provider
+                            .get_gist(&mapping.gist_id, Some(&mapping.gist_filename))
+                            .await
+                        {
+                            Ok(d) => {
+                                verified = d
+                                    .files
+                                    .iter()
+                                    .find(|f| f.filename == mapping.gist_filename)
+                                    .and_then(|f| f.content.clone())
+                                    .filter(|c| readback_ok(c));
+                            }
+                            Err(e) => {
+                                return emit_outcome(
+                                    ctx,
+                                    mapping,
+                                    MappingStatus::Error,
+                                    Some(format!("上传回读校验失败: {e}")),
+                                    false,
+                                    rate_limit_hint(&e),
+                                );
+                            }
+                        }
+                    }
+                    let Some(back) = verified else {
+                        tracing::error!("[{}] 上传回读校验失败：远端内容与发送不一致，不落快照", mapping.id);
+                        return emit_outcome(
+                            ctx,
+                            mapping,
+                            MappingStatus::Error,
+                            Some("上传回读校验失败：远端内容与发送不一致".into()),
+                            false,
+                            None,
+                        );
+                    };
                     let state = SnapshotState {
                         last_synced_hash: sha256_hex(&normalize(&back)),
                         last_synced_at: Utc::now(),
@@ -349,10 +392,20 @@ pub async fn run_sync_cycle_with_hint(
                     .snapshots
                     .archive(&mapping.id, Side::Local, local, &ext_of(&mapping.local_path));
             }
-            // 写盘保留远端原始字节（spec §6.5）
+            // 写盘保留远端原始字节（spec §6.5）；原子替换（temp + rename 同目录同卷），
+            // 写一半失败不会留下截断文件；temp 路径与映射路径不同，watcher 事件天然不命中映射
             let raw = remote_raw.clone().expect("Download 分支必有远端内容");
             tracing::info!("[{}] 下载 gist {}/{} → {}（{} 字节）", mapping.id, mapping.gist_id, mapping.gist_filename, mapping.local_path, raw.len());
-            if let Err(e) = std::fs::write(&mapping.local_path, raw.as_bytes()) {
+            let local = Path::new(&mapping.local_path);
+            let tmp_path = local.with_file_name(format!(
+                ".{}.gistsync.tmp",
+                local.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+            ));
+            if let Err(e) = std::fs::write(&tmp_path, raw.as_bytes()) {
+                return emit_outcome(ctx, mapping, MappingStatus::Error, Some(format!("写入本地文件失败: {e}")), false, None);
+            }
+            if let Err(e) = std::fs::rename(&tmp_path, local) {
+                let _ = std::fs::remove_file(&tmp_path);
                 return emit_outcome(ctx, mapping, MappingStatus::Error, Some(format!("写入本地文件失败: {e}")), false, None);
             }
             let mtime = std::fs::metadata(&mapping.local_path)
@@ -426,6 +479,8 @@ mod tests {
         /// (gist_id, filename, content)
         files: Mutex<Vec<(String, String, String)>>,
         fail_next: Mutex<Option<ProviderError>>,
+        /// 模拟远端回读与发送不一致（服务端篡改/中间层截断）
+        corrupt_update: Mutex<bool>,
         calls: Mutex<Vec<&'static str>>,
     }
 
@@ -434,6 +489,7 @@ mod tests {
             Self {
                 files: Mutex::new(vec![]),
                 fail_next: Mutex::new(None),
+                corrupt_update: Mutex::new(false),
                 calls: Mutex::new(vec![]),
             }
         }
@@ -470,7 +526,11 @@ mod tests {
         async fn list_gists(&self, _since: Option<DateTime<Utc>>) -> Result<Vec<GistSummary>, ProviderError> {
             Ok(vec![])
         }
-        async fn get_gist(&self, gist_id: &str) -> Result<GistDetail, ProviderError> {
+        async fn get_gist(
+            &self,
+            gist_id: &str,
+            _wanted_file: Option<&str>,
+        ) -> Result<GistDetail, ProviderError> {
             self.calls.lock().unwrap().push("get");
             if let Some(e) = self.fail_next.lock().unwrap().take() {
                 return Err(e);
@@ -499,8 +559,13 @@ mod tests {
             if let Some(e) = self.fail_next.lock().unwrap().take() {
                 return Err(e);
             }
-            self.set_file(gist_id, filename, content);
-            self.get_gist(gist_id).await
+            let stored = if *self.corrupt_update.lock().unwrap() {
+                format!("corrupted:{content}")
+            } else {
+                content.to_string()
+            };
+            self.set_file(gist_id, filename, &stored);
+            self.get_gist(gist_id, Some(filename)).await
         }
     }
 
@@ -681,6 +746,38 @@ mod tests {
         let status = run_sync_cycle(&f.ctx, &f.mapping, Trigger::ManualDownload).await;
         assert_eq!(status, MappingStatus::Idle);
         assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "remote v2");
+    }
+
+    #[tokio::test]
+    async fn upload_readback_mismatch_fails_and_keeps_snapshot() {
+        // 远端回读与发送不一致（服务端篡改/截断）：报错、不落快照
+        let f = fixture("local v2", "base", Some("base"));
+        *f.fake.corrupt_update.lock().unwrap() = true;
+        let status = run_sync_cycle(&f.ctx, &f.mapping, Trigger::ManualUpload).await;
+        assert_eq!(status, MappingStatus::Error);
+        assert_eq!(
+            f.ctx.snapshots.load("m1").unwrap().last_synced_hash,
+            sha("base"),
+            "回读校验失败时快照不应推进"
+        );
+        // 二次核对会多打一次 get（初次 update 响应 1 次 + 重拉 1 次）
+        assert!(f.fake.calls() >= 2, "应触发二次拉取核对");
+    }
+
+    #[tokio::test]
+    async fn download_leaves_no_tmp_file() {
+        // 原子写盘：成功后目录里不应残留 .gistsync.tmp 临时文件
+        let f = fixture("base", "remote v2", Some("base"));
+        let status = run_sync_cycle(&f.ctx, &f.mapping, Trigger::Poll).await;
+        assert_eq!(status, MappingStatus::Idle);
+        let parent = f.local_path.parent().unwrap();
+        let leftovers: Vec<String> = fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains("gistsync.tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "不应有临时文件残留: {leftovers:?}");
     }
 
     #[tokio::test]

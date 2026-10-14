@@ -135,7 +135,7 @@ async fn remote_content(gist_id: &str) -> String {
     let token = std::env::var("GISTSYNC_E2E_TOKEN").unwrap();
     let provider = GithubProvider::new(token);
     let detail = provider
-        .get_gist(gist_id)
+        .get_gist(gist_id, Some("gistsync-e2e.md"))
         .await
         .expect("读取 gist 失败");
     detail
