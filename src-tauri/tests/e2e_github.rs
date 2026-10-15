@@ -62,10 +62,14 @@ async fn setup() -> (SyncCtx, Mapping, tempfile::TempDir) {
         providers,
         guard: SelfWriteGuard::new(),
         sink: Arc::new(VecSink::default()),
+        synclog: Arc::new(gist_auto_sync_lib::synclog::SyncLogStore::load_from(
+            dir.path().join("synclog.jsonl"),
+        )),
     };
 
     let mapping = Mapping {
         id: "e2e-m".into(),
+        name: String::new(),
         local_path: local_path.to_string_lossy().to_string(),
         account_id: "e2e-acc".into(),
         gist_id: String::new(), // 由用例填充

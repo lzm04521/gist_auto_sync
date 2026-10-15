@@ -6,9 +6,29 @@
     "dashboard": "仪表盘",
     "mappings": "同步映射",
     "history": "历史",
+    "logs": "日志",
     "accounts": "账号",
     "settings": "设置",
     "about": "关于"
+  },
+  "logs": {
+    "title": "同步日志",
+    "time": "时间",
+    "mapping": "映射",
+    "direction": "方向",
+    "trigger": "触发",
+    "result": "结果",
+    "refresh": "刷新",
+    "upload": "上传",
+    "download": "下载",
+    "autoLocal": "自动 · 文件变更",
+    "autoPoll": "自动 · 轮询",
+    "manual": "手动",
+    "changed": "有变化",
+    "noChange": "无变化",
+    "conflict": "冲突",
+    "failed": "失败",
+    "empty": "暂无同步记录"
   },
   "common": {
     "ok": "确定",
@@ -61,6 +81,8 @@
     "gistManual": "手动输入 ID",
     "gistFilename": "Gist 内文件名",
     "gistFilenameHint": "默认与本地文件名相同",
+    "name": "名称",
+    "nameHint": "留空时自动跟随 Gist 内文件名",
     "upload": "本地 → 远端",
     "download": "远端 → 本地",
     "direction": "同步方向",
@@ -146,7 +168,8 @@
     "LOG_DIR_OPEN_FAILED": "打开日志目录失败：{{detail}}",
     "HISTORY_FILE_INVALID": "非法的归档文件名",
     "HISTORY_FILE_NOT_FOUND": "归档文件不存在",
-    "HISTORY_READ_FAILED": "读取归档失败：{{detail}}"
+    "HISTORY_READ_FAILED": "读取归档失败：{{detail}}",
+    "MAPPING_NAME_TOO_LONG": "映射名称长度不能超过 100 字符"
   },
   "statusMsg": {
     "local": {

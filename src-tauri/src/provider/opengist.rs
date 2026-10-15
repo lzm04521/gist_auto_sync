@@ -59,6 +59,9 @@ struct OgGist {
     id: String,
     #[serde(default)]
     description: Option<String>,
+    /// GistSimple/Gist 均带 title；缺失时容忍为 None
+    #[serde(default)]
+    title: Option<String>,
     updated_at: DateTime<Utc>,
     #[serde(default)]
     files: HashMap<String, OgFile>,
@@ -98,6 +101,7 @@ fn to_summary(g: OgGist) -> GistSummary {
     GistSummary {
         id: g.id,
         description: g.description,
+        title: g.title,
         updated_at: g.updated_at,
         files: g
             .files
@@ -397,6 +401,33 @@ mod tests {
         let out = provider(&server).list_gists(None).await.unwrap();
         assert_eq!(out.len(), 100, "同页内容去重后应恰为 100 条");
         server.verify().await; // 请求数恰好停在安全上限
+    }
+
+    #[tokio::test]
+    async fn list_gists_parses_title_when_present_and_absent() {
+        let server = MockServer::start().await;
+        let mk = |id: &str, title: Option<&str>| {
+            let mut g = json!({
+                "id": id,
+                "description": "描述",
+                "updated_at": "2026-10-13T08:00:00Z",
+            });
+            if let Some(t) = title {
+                g["title"] = json!(t);
+            }
+            g
+        };
+        Mock::given(method("GET"))
+            .and(path("/api/gists"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                mk("g1", Some("配置笔记")),
+                mk("g2", None),
+            ])))
+            .mount(&server)
+            .await;
+        let gists = provider(&server).list_gists(None).await.unwrap();
+        assert_eq!(gists[0].title.as_deref(), Some("配置笔记"));
+        assert_eq!(gists[1].title, None, "响应无 title 键时容忍为 None");
     }
 
     #[tokio::test]

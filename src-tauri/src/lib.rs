@@ -5,6 +5,7 @@ pub mod model;
 pub mod provider;
 pub mod secrets;
 pub mod sync;
+pub mod synclog;
 
 use std::sync::Arc;
 
@@ -26,7 +27,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            // 开机自启附加参数：静默进托盘，不弹主窗口（Windows 写入 Run 键命令行）
+            Some(vec!["--hidden"]),
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -74,12 +76,16 @@ pub fn run() {
 
             let sink: Arc<dyn sync::engine::StatusSink> =
                 Arc::new(commands::IpcSink { app: handle.clone() });
+            let synclog = Arc::new(synclog::SyncLogStore::load_from(
+                config_dir.join("synclog").join("synclog.jsonl"),
+            ));
             let ctx = Arc::new(SyncCtx {
                 config: config.clone(),
                 snapshots: snapshots.clone(),
                 providers: ProviderCache::new(),
                 guard: SelfWriteGuard::new(),
                 sink,
+                synclog: synclog.clone(),
             });
             let engine = Arc::new(
                 Engine::new(ctx, config_dir.join("statuses.json"))
@@ -90,11 +96,18 @@ pub fn run() {
                 config,
                 snapshots,
                 engine: engine.clone(),
+                synclog,
                 log_dir,
                 log_reload,
             });
 
             setup_tray(app)?;
+
+            // 主窗口默认不可见（tauri.conf.json visible=false）：仅开机自启（--hidden）保持托盘静默，
+            // 桌面双击/更新后重启（不带参数）正常显示
+            if !std::env::args().any(|a| a == "--hidden") {
+                show_main_window(app.handle());
+            }
 
             // 引擎常驻任务 + 启动对账
             tauri::async_runtime::spawn(async move {
@@ -130,6 +143,7 @@ pub fn run() {
             commands::sync_manual,
             commands::sync_set_paused,
             commands::sync_is_paused,
+            commands::log_list,
             commands::history_rollback_local,
             commands::history_rollback_remote,
             commands::history_list,

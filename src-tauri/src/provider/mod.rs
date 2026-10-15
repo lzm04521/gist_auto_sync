@@ -26,6 +26,9 @@ pub struct UserInfo {
 pub struct GistSummary {
     pub id: String,
     pub description: Option<String>,
+    /// Opengist 响应的 gist 标题；GitHub 无此概念恒 None
+    #[serde(default)]
+    pub title: Option<String>,
     pub updated_at: DateTime<Utc>,
     /// gist 内全部文件名
     pub files: Vec<String>,

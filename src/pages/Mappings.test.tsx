@@ -36,6 +36,7 @@ const account = {
 const mappingView = {
   mapping: {
     id: "m1",
+    name: "",
     localPath: "C:/notes/todo.md",
     accountId: "acc1",
     gistId: "abc123",
@@ -69,8 +70,8 @@ describe("Mappings page", () => {
       </MemoryRouter>,
     );
     expect(await screen.findByText("C:/notes/todo.md")).toBeInTheDocument();
-    // 路径与 gist 渲染在同一单元格，文本被拆分，用 span 级正则匹配
-    expect(screen.getByText(/abc123 \/ todo\.md/, { selector: "span" })).toBeInTheDocument();
+    // gist 块只显示 id 前 8 位（此处 fixture 全长 6 位）+ 文件名
+    expect(screen.getByText(/abc123\/todo\.md/, { selector: "span" })).toBeInTheDocument();
   });
 
   it("选择文件后 gistFilename 默认联动为文件名", async () => {
@@ -142,6 +143,8 @@ describe("Mappings page", () => {
     await userEvent.click(screen.getByRole("button", { name: /^OK$|^确\s*定$/ }));
     await waitFor(() => expect(mocks.mappingCreate).toHaveBeenCalledTimes(1));
     expect(mocks.mappingCreate).toHaveBeenCalledWith({
+      // 名称留空时自动跟随 Gist 内文件名（V0.5 行为）
+      name: "todo.md",
       localPath: "C:/notes/todo.md",
       accountId: "acc1",
       gistId: "abc123",

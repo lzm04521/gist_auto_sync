@@ -23,6 +23,7 @@ import {
 } from "../api/ipc";
 import { ipcErrorMessage } from "../i18n/errors";
 import DiffView from "../components/DiffView";
+import { mappingDisplayName } from "../components/MappingFileCell";
 import type { GistCommit, HistoryEntry, HistoryReason, MappingView } from "../types";
 
 interface PreviewText {
@@ -157,7 +158,7 @@ export default function History() {
           onChange={(v) => setMappingId(v)}
           options={views.map((v) => ({
             value: v.mapping.id,
-            label: v.mapping.localPath,
+            label: mappingDisplayName(v.mapping),
           }))}
         />
       }

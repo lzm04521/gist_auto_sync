@@ -13,6 +13,7 @@ import {
 import { ipcErrorMessage, statusMessageText } from "../i18n/errors";
 import type { MappingStatus, MappingView } from "../types";
 import ConflictDialog from "../components/ConflictDialog";
+import MappingFileCell from "../components/MappingFileCell";
 
 export function statusColor(status: MappingStatus): string {
   switch (status) {
@@ -123,13 +124,8 @@ export default function Dashboard() {
         locale={{ emptyText: t("common.empty") }}
         columns={[
           {
-            title: t("dashboard.file"),
-            render: (_, v) => (
-              <Space direction="vertical" size={0}>
-                <span>{v.mapping.localPath}</span>
-                <span>→ {v.mapping.gistId} / {v.mapping.gistFilename}</span>
-              </Space>
-            ),
+            title: t("mappings.name"),
+            render: (_, v) => <MappingFileCell mapping={v.mapping} />,
           },
           {
             title: t("dashboard.status"),

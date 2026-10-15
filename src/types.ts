@@ -12,6 +12,7 @@ export interface Account {
 
 export interface Mapping {
   id: string;
+  name: string;
   localPath: string;
   accountId: string;
   gistId: string;
@@ -38,6 +39,8 @@ export interface UserInfo {
 export interface GistSummary {
   id: string;
   description: string | null;
+  /** Opengist 的 gist 标题；GitHub 恒 null */
+  title: string | null;
   updatedAt: string;
   files: string[];
 }
@@ -72,6 +75,7 @@ export interface AccountInput {
 }
 
 export interface MappingInput {
+  name: string;
   localPath: string;
   accountId: string;
   gistId: string;
@@ -103,4 +107,30 @@ export interface GistCommit {
 export interface HistoryPreview {
   historical: string;
   currentLocal: string;
+}
+
+// ── 同步操作日志（V0.5）────────────────────────────────────────────────
+
+export type LogTrigger =
+  | "localSettled"
+  | "poll"
+  | "manualUpload"
+  | "manualDownload";
+
+export type LogDirection = "upload" | "download";
+
+export type LogOutcome =
+  | { kind: "changed"; added: number | null; removed: number | null }
+  | { kind: "noChange" }
+  | { kind: "conflict" }
+  | { kind: "error"; code: string };
+
+export interface SyncLogEntry {
+  ts: string;
+  mappingId: string;
+  /** 显示名快照（映射删除后仍可读） */
+  label: string;
+  trigger: LogTrigger;
+  direction: LogDirection | null;
+  outcome: LogOutcome;
 }

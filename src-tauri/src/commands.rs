@@ -18,6 +18,7 @@ pub struct AppState {
     pub config: Arc<ConfigStore>,
     pub snapshots: Arc<SnapshotStore>,
     pub engine: Arc<Engine>,
+    pub synclog: Arc<crate::synclog::SyncLogStore>,
     pub log_dir: std::path::PathBuf,
     /// 日志级别热更新句柄（初始化失败时为 None，级别改动需重启生效）
     pub log_reload: Option<crate::logging::LogReloadHandle>,
@@ -57,6 +58,9 @@ pub struct AccountInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MappingInput {
+    /// 显示名（可选，纯展示用途；旧前端缺键为空串）
+    #[serde(default)]
+    pub name: String,
     pub local_path: String,
     pub account_id: String,
     pub gist_id: String,
@@ -271,6 +275,9 @@ fn validate_mapping(
     input: &MappingInput,
     exclude_id: Option<&str>,
 ) -> Result<(String, String), String> {
+    if input.name.chars().count() > 100 {
+        return Err(ipc_err("MAPPING_NAME_TOO_LONG", "映射名称长度不能超过 100 字符"));
+    }
     if !state
         .config
         .read()
@@ -324,6 +331,7 @@ pub fn mapping_create(state: State<'_, AppState>, input: MappingInput) -> Result
     let (local_path, gist_filename) = validate_mapping(&state, &input, None)?;
     let mapping = Mapping {
         id: uuid::Uuid::new_v4().to_string(),
+        name: input.name.trim().to_string(),
         local_path,
         account_id: input.account_id,
         gist_id: input.gist_id.trim().to_string(),
@@ -392,6 +400,7 @@ pub fn mapping_update(
                 return Err(ipc_err("MAPPING_NOT_FOUND", "映射不存在"));
             };
             rebuild = m.local_path != local_path || m.enabled != input.enabled;
+            m.name = input.name.trim().to_string();
             m.local_path = local_path;
             m.account_id = input.account_id;
             m.gist_id = input.gist_id.trim().to_string();
@@ -501,6 +510,12 @@ pub fn sync_set_paused(state: State<'_, AppState>, paused: bool) {
 #[tauri::command]
 pub fn sync_is_paused(state: State<'_, AppState>) -> bool {
     state.engine.is_global_paused()
+}
+
+/// 同步操作流水查询（新在前；limit=None 全量，V0.5 日志页用）
+#[tauri::command]
+pub fn log_list(state: State<'_, AppState>, limit: Option<usize>) -> Vec<crate::synclog::SyncLogEntry> {
+    state.synclog.tail(limit)
 }
 
 /// 回滚到本地归档版本（本地与远端同时恢复）
