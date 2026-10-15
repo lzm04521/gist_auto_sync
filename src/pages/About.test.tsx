@@ -77,7 +77,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   updaterState = baseState();
   mocks.settingsGet.mockResolvedValue(fullSettings(true));
-  mocks.getVersion.mockResolvedValue("0.5.0");
+  mocks.getVersion.mockResolvedValue("0.5.1");
   mocks.downloadAndInstall.mockResolvedValue(true);
   i18n.changeLanguage("zh-CN");
 });
@@ -85,7 +85,7 @@ beforeEach(() => {
 describe("About 页", () => {
   it("渲染当前版本、检查更新按钮与自动检查开关", async () => {
     renderAbout();
-    expect(await screen.findByText("0.5.0")).toBeInTheDocument();
+    expect(await screen.findByText("0.5.1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /检查更新/ })).toBeInTheDocument();
     const sw = screen.getByRole("switch", { name: /自动检查更新/ });
     expect(sw).toBeInTheDocument();
@@ -94,7 +94,7 @@ describe("About 页", () => {
   it("点检查更新调用 hook，发现新版本弹窗展示版本与纯文本说明", async () => {
     const user = userEvent.setup();
     const view = renderAbout();
-    await screen.findByText("0.5.0");
+    await screen.findByText("0.5.1");
     await user.click(screen.getByRole("button", { name: /检查更新/ }));
     expect(mocks.check).toHaveBeenCalledTimes(1);
 
@@ -223,6 +223,6 @@ describe("App 菜单集成", () => {
     expect(labels).toEqual(["仪表盘", "同步映射", "历史", "日志", "账号", "设置", "关于"]);
 
     await user.click(screen.getByText("关于"));
-    expect(await screen.findByText("0.5.0")).toBeInTheDocument();
+    expect(await screen.findByText("0.5.1")).toBeInTheDocument();
   });
 });
