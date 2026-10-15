@@ -1,6 +1,6 @@
 [package]
 name = "gist-auto-sync"
-version = "0.1.0"
+version = "0.4.0"
 description = "Auto sync local files with GitHub Gist / Opengist"
 authors = ["Gist Auto Sync contributors"]
 edition = "2024"
