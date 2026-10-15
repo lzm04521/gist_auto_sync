@@ -1,9 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({
   check: vi.fn(),
   relaunch: vi.fn(),
+  settingsGet: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/plugin-updater", () => ({
@@ -14,17 +15,22 @@ vi.mock("@tauri-apps/plugin-process", () => ({
   relaunch: mocks.relaunch,
 }));
 
-import { useUpdater } from "./useUpdater";
+vi.mock("../api/ipc", async () => {
+  const actual = await vi.importActual<typeof import("../api/ipc")>("../api/ipc");
+  return { ...actual, settingsGet: mocks.settingsGet };
+});
 
-/** 构造插件 Update 形状的对象；downloadAndInstall 依 events 驱动进度回调 */
+import { useStartupAutoCheck, useUpdater } from "./useUpdater";
+
+/** 构造插件 Update 形状的对象；downloadAndInstall(onEvent, ...) 依 events 驱动进度回调 */
 function fakeUpdate(events: Array<{ event: string; data: Record<string, unknown> }>) {
   return {
     version: "0.4.1",
     currentVersion: "0.4.0",
-    notes: "修复若干问题",
-    date: new Date(),
-    downloadAndInstall: vi.fn(async (opts?: { onEvent?: (e: { event: string; data: Record<string, unknown> }) => void }) => {
-      for (const e of events) opts?.onEvent?.(e);
+    body: "修复若干问题",
+    date: new Date().toISOString(),
+    downloadAndInstall: vi.fn(async (onEvent?: (e: { event: string; data: Record<string, unknown> }) => void) => {
+      for (const e of events) onEvent?.(e);
     }),
   };
 }
@@ -129,5 +135,77 @@ describe("useUpdater 状态机", () => {
     expect(result.current.notes).toBeNull();
     expect(result.current.progress).toBeNull();
     expect(result.current.error).toBeNull();
+  });
+});
+
+describe("useStartupAutoCheck 启动自动检查", () => {
+  const fullSettings = (autoCheckUpdate: boolean) => ({
+    debounceSeconds: 3,
+    pollIntervalMinutes: 5,
+    autoStart: true,
+    logLevel: "info",
+    language: "zh-CN",
+    autoCheckUpdate,
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("开关关闭时延迟后完全不发起检查", async () => {
+    mocks.settingsGet.mockResolvedValue(fullSettings(false));
+    const onAvailable = vi.fn();
+    renderHook(() => useStartupAutoCheck(onAvailable));
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    expect(mocks.check).not.toHaveBeenCalled();
+    expect(onAvailable).not.toHaveBeenCalled();
+  });
+
+  it("开关开启时延迟 10 秒检查恰好一次", async () => {
+    mocks.settingsGet.mockResolvedValue(fullSettings(true));
+    const onAvailable = vi.fn();
+    renderHook(() => useStartupAutoCheck(onAvailable));
+    await act(() => vi.advanceTimersByTimeAsync(9_999));
+    expect(mocks.check).not.toHaveBeenCalled();
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(mocks.check).toHaveBeenCalledTimes(1);
+  });
+
+  it("检查失败静默：不抛未处理错误、不触发回调", async () => {
+    mocks.settingsGet.mockResolvedValue(fullSettings(true));
+    mocks.check.mockRejectedValue(new Error("github unreachable"));
+    const onAvailable = vi.fn();
+    renderHook(() => useStartupAutoCheck(onAvailable));
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    expect(onAvailable).not.toHaveBeenCalled();
+  });
+
+  it("发现新版本回调 onAvailable 并带版本号", async () => {
+    mocks.settingsGet.mockResolvedValue(fullSettings(true));
+    mocks.check.mockResolvedValue({
+      version: "0.4.1",
+      currentVersion: "0.4.0",
+      body: "",
+      date: new Date().toISOString(),
+      downloadAndInstall: vi.fn(),
+    });
+    const onAvailable = vi.fn();
+    renderHook(() => useStartupAutoCheck(onAvailable));
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    expect(onAvailable).toHaveBeenCalledWith("0.4.1");
+  });
+
+  it("卸载后推进时间不再触发检查", async () => {
+    mocks.settingsGet.mockResolvedValue(fullSettings(true));
+    const onAvailable = vi.fn();
+    const { unmount } = renderHook(() => useStartupAutoCheck(onAvailable));
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    unmount();
+    await act(() => vi.advanceTimersByTimeAsync(20_000));
+    expect(mocks.check).not.toHaveBeenCalled();
+    expect(onAvailable).not.toHaveBeenCalled();
   });
 });

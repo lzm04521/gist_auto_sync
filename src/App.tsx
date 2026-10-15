@@ -1,5 +1,5 @@
 import { HashRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { App as AntApp, ConfigProvider, Layout, Menu } from "antd";
+import { App as AntApp, ConfigProvider, Layout, Menu, notification } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import enUS from "antd/locale/en_US";
 import {
@@ -11,6 +11,7 @@ import {
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import Accounts from "./pages/Accounts";
+import { useStartupAutoCheck } from "./hooks/useUpdater";
 import Dashboard from "./pages/Dashboard";
 import History from "./pages/History";
 import Mappings from "./pages/Mappings";
@@ -30,6 +31,14 @@ function AppLayout() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
+
+  // 启动后延迟自动检查新版本；发现新版仅轻提示并引导到"关于"页（检查失败静默）
+  useStartupAutoCheck((version) => {
+    notification.info({
+      message: t("about.foundNew", { version }),
+      onClick: () => navigate("/about"),
+    });
+  });
 
   return (
     <Layout style={{ minHeight: "100vh" }}>

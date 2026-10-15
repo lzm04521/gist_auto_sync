@@ -7,7 +7,8 @@
     "mappings": "Mappings",
     "history": "History",
     "accounts": "Accounts",
-    "settings": "Settings"
+    "settings": "Settings",
+    "about": "About"
   },
   "common": {
     "ok": "OK",
@@ -206,5 +207,21 @@
     "saved": "Settings saved",
     "debounceRange": "Debounce must be 1-3600 seconds",
     "pollRange": "Poll interval must be 1-1440 minutes"
+  },
+  "about": {
+    "title": "About",
+    "version": "Current version",
+    "checkUpdate": "Check for updates",
+    "upToDate": "You are on the latest version",
+    "checkFailed": "Failed to check for updates",
+    "downloadFailed": "Download or install failed",
+    "newVersion": "New version {{version}} available",
+    "updateNow": "Update now",
+    "later": "Later",
+    "relaunchNow": "Restart now",
+    "relaunchHint": "Installed. Restart to apply",
+    "downloading": "Downloading",
+    "autoCheck": "Check for updates automatically",
+    "foundNew": "New version {{version}} available. Click to view"
   }
 }

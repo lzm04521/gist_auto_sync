@@ -1,6 +1,7 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { check as pluginCheck, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch as pluginRelaunch } from "@tauri-apps/plugin-process";
+import { settingsGet } from "../api/ipc";
 
 export type UpdaterStatus =
   | "idle"
@@ -32,7 +33,7 @@ export function useUpdater() {
       if (update) {
         updateRef.current = update;
         setVersion(update.version);
-        setNotes(update.notes ?? null);
+        setNotes(update.body ?? null);
         setStatus("available");
       } else {
         setStatus("upToDate");
@@ -52,18 +53,16 @@ export function useUpdater() {
     let contentLength = 0;
     let received = 0;
     try {
-      await update.downloadAndInstall({
-        onEvent: ({ event, data }) => {
-          const len = data as { contentLength?: number; chunkLength?: number };
-          if (event === "Started" && typeof len.contentLength === "number") {
-            contentLength = len.contentLength;
-          } else if (event === "Progress" && typeof len.chunkLength === "number") {
-            received += len.chunkLength;
-            if (contentLength > 0) {
-              setProgress(Math.min(100, Math.round((received / contentLength) * 100)));
-            }
+      // 插件签名：downloadAndInstall(onEvent, options)，回调为第一个位置参数
+      await update.downloadAndInstall((evt) => {
+        if (evt.event === "Started" && typeof evt.data.contentLength === "number") {
+          contentLength = evt.data.contentLength;
+        } else if (evt.event === "Progress" && typeof evt.data.chunkLength === "number") {
+          received += evt.data.chunkLength;
+          if (contentLength > 0) {
+            setProgress(Math.min(100, Math.round((received / contentLength) * 100)));
           }
-        },
+        }
       });
       setProgress(100);
       setStatus("downloaded");
@@ -90,4 +89,35 @@ export function useUpdater() {
   }, []);
 
   return { status, version, notes, progress, error, check, downloadAndInstall, relaunch, reset };
+}
+
+/**
+ * 启动后延迟自动检查一次新版本（默认 10 秒，受设置 autoCheckUpdate 控制）。
+ * 不经 useUpdater 状态机：自动路径失败一律静默（console.debug 留痕，不打扰用户），
+ * 发现新版本仅回调 onAvailable，由调用方决定提示方式。无轮询，每次启动最多一次。
+ */
+export function useStartupAutoCheck(onAvailable: (version: string) => void) {
+  const cbRef = useRef(onAvailable);
+  cbRef.current = onAvailable;
+
+  useEffect(() => {
+    let timer: number | undefined;
+    let cancelled = false;
+    settingsGet()
+      .then((s) => {
+        if (cancelled || !s.autoCheckUpdate) return;
+        timer = window.setTimeout(() => {
+          pluginCheck()
+            .then((update) => {
+              if (update) cbRef.current(update.version);
+            })
+            .catch((e) => console.debug("启动自动检查更新失败：", e));
+        }, 10_000);
+      })
+      .catch((e) => console.debug("读取设置失败，跳过启动自动检查：", e));
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, []);
 }
