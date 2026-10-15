@@ -37,6 +37,7 @@ function view(overrides: Partial<MappingViewShape> = {}): MappingViewShape {
   return {
     mapping: {
       id: "m1",
+      name: "",
       localPath: "C:/notes/todo.md",
       accountId: "acc1",
       gistId: "abc123",
@@ -55,6 +56,7 @@ function view(overrides: Partial<MappingViewShape> = {}): MappingViewShape {
 interface MappingViewShape {
   mapping: {
     id: string;
+    name: string;
     localPath: string;
     accountId: string;
     gistId: string;

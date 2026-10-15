@@ -19,6 +19,7 @@ import {
   mappingSetEnabled,
 } from "../api/ipc";
 import { ipcErrorMessage } from "../i18n/errors";
+import MappingFileCell from "../components/MappingFileCell";
 import MappingForm from "../components/MappingForm";
 import type { Account, Mapping, MappingView } from "../types";
 
@@ -84,14 +85,8 @@ export default function Mappings() {
         locale={{ emptyText: t("common.empty") }}
         columns={[
           {
-            title: t("mappings.localPath"),
-            dataIndex: ["mapping", "localPath"],
-            render: (_, view) => (
-              <Space direction="vertical" size={0}>
-                <span>{view.mapping.localPath}</span>
-                <span>→ {view.mapping.gistId} / {view.mapping.gistFilename}</span>
-              </Space>
-            ),
+            title: t("mappings.name"),
+            render: (_, view) => <MappingFileCell mapping={view.mapping} />,
           },
           {
             title: t("mappings.account"),

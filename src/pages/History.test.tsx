@@ -26,6 +26,7 @@ import { IpcError } from "../api/ipc";
 const mappingView = {
   mapping: {
     id: "m1",
+    name: "",
     localPath: "C:/notes/todo.md",
     accountId: "acc1",
     gistId: "abc123",
