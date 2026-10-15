@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";import { App as AntApp, Button, Form, Input, Modal, Radio, Select, Switch } from "antd";
+import { useEffect, useState } from "react";
+import { App as AntApp, Button, Form, Input, Modal, Radio, Select, Switch } from "antd";
 import { FolderOpenOutlined } from "@ant-design/icons";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";

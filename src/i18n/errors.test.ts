@@ -34,6 +34,14 @@ describe("ipcErrorMessage", () => {
     expect(ipcErrorMessage(new Error("boom"), t)).toContain("boom");
     expect(ipcErrorMessage("plain text", t)).toBe("plain text");
   });
+
+  it("V0.5 新增错误码均有双语文案（缺键时 t 返回键名本身）", () => {
+    for (const lng of ["zh-CN", "en"]) {
+      expect(i18n.t("errors.MAPPING_NAME_TOO_LONG", { lng })).not.toBe(
+        "errors.MAPPING_NAME_TOO_LONG",
+      );
+    }
+  });
 });
 
 describe("statusMessageText", () => {

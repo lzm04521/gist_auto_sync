@@ -168,7 +168,8 @@
     "LOG_DIR_OPEN_FAILED": "打开日志目录失败：{{detail}}",
     "HISTORY_FILE_INVALID": "非法的归档文件名",
     "HISTORY_FILE_NOT_FOUND": "归档文件不存在",
-    "HISTORY_READ_FAILED": "读取归档失败：{{detail}}"
+    "HISTORY_READ_FAILED": "读取归档失败：{{detail}}",
+    "MAPPING_NAME_TOO_LONG": "映射名称长度不能超过 100 字符"
   },
   "statusMsg": {
     "local": {

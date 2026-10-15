@@ -168,7 +168,8 @@
     "LOG_DIR_OPEN_FAILED": "Failed to open log directory: {{detail}}",
     "HISTORY_FILE_INVALID": "Invalid archive file name",
     "HISTORY_FILE_NOT_FOUND": "Archive file not found",
-    "HISTORY_READ_FAILED": "Failed to read archive: {{detail}}"
+    "HISTORY_READ_FAILED": "Failed to read archive: {{detail}}",
+    "MAPPING_NAME_TOO_LONG": "Mapping name must be at most 100 characters"
   },
   "statusMsg": {
     "local": {
