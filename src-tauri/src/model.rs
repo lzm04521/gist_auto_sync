@@ -26,6 +26,9 @@ pub struct Account {
 #[serde(rename_all = "camelCase")]
 pub struct Mapping {
     pub id: String,
+    /// 显示名（可选，纯展示用途；旧配置缺键为空串）
+    #[serde(default)]
+    pub name: String,
     pub local_path: String,
     pub account_id: String,
     pub gist_id: String,
@@ -33,6 +36,23 @@ pub struct Mapping {
     pub upload_enabled: bool,
     pub download_enabled: bool,
     pub enabled: bool,
+}
+
+impl Mapping {
+    /// 显示名回退链：name → gist 文件名 → 本地文件名 → 本地路径
+    /// （操作日志快照与前端展示同规则，见 doc/20261015-设计文档-V0.5改进.md §4.1）
+    pub fn display_name(&self) -> &str {
+        if !self.name.is_empty() {
+            &self.name
+        } else if !self.gist_filename.is_empty() {
+            &self.gist_filename
+        } else {
+            std::path::Path::new(&self.local_path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&self.local_path)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -124,5 +144,52 @@ mod tests {
         assert!(cfg.accounts.is_empty());
         assert!(cfg.mappings.is_empty());
         assert_eq!(cfg.settings.debounce_seconds, 3);
+    }
+
+    #[test]
+    fn legacy_mapping_without_name_deserializes() {
+        let json = r#"{
+            "id": "map-1",
+            "localPath": "C:/notes/todo.md",
+            "accountId": "acc-1",
+            "gistId": "abcdef123456",
+            "gistFilename": "todo.md",
+            "uploadEnabled": true,
+            "downloadEnabled": true,
+            "enabled": true
+        }"#;
+        let m: Mapping = serde_json::from_str(json).unwrap();
+        assert_eq!(m.name, "");
+    }
+
+    #[test]
+    fn display_name_fallback_chain() {
+        let full = Mapping {
+            id: "map-1".into(),
+            name: "工作笔记".into(),
+            local_path: "C:/notes/todo.md".into(),
+            account_id: "acc-1".into(),
+            gist_id: "abcdef123456".into(),
+            gist_filename: "todo.md".into(),
+            upload_enabled: true,
+            download_enabled: true,
+            enabled: true,
+        };
+        assert_eq!(full.display_name(), "工作笔记");
+        let no_name = Mapping {
+            name: String::new(),
+            ..full.clone()
+        };
+        assert_eq!(no_name.display_name(), "todo.md");
+        let no_filename = Mapping {
+            gist_filename: String::new(),
+            ..no_name
+        };
+        assert_eq!(no_filename.display_name(), "todo.md", "回退到本地文件名");
+        let nothing = Mapping {
+            local_path: String::new(),
+            ..no_filename
+        };
+        assert_eq!(nothing.display_name(), "", "终极兜底为本地路径本身");
     }
 }

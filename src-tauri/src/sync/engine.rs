@@ -761,6 +761,7 @@ mod tests {
         };
         let mapping = Mapping {
             id: "m1".into(),
+            name: String::new(),
             local_path: local_path.to_string_lossy().to_string(),
             account_id: "acc1".into(),
             gist_id: "gist1".into(),

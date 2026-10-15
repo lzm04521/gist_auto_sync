@@ -96,6 +96,7 @@ mod tests {
     fn sample_mapping() -> Mapping {
         Mapping {
             id: "map-1".into(),
+            name: "示例映射".into(),
             local_path: "C:/notes/todo.md".into(),
             account_id: "acc-1".into(),
             gist_id: "abcdef123456".into(),

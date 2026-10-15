@@ -57,6 +57,9 @@ pub struct AccountInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MappingInput {
+    /// 显示名（可选，纯展示用途；旧前端缺键为空串）
+    #[serde(default)]
+    pub name: String,
     pub local_path: String,
     pub account_id: String,
     pub gist_id: String,
@@ -271,6 +274,9 @@ fn validate_mapping(
     input: &MappingInput,
     exclude_id: Option<&str>,
 ) -> Result<(String, String), String> {
+    if input.name.chars().count() > 100 {
+        return Err(ipc_err("MAPPING_NAME_TOO_LONG", "映射名称长度不能超过 100 字符"));
+    }
     if !state
         .config
         .read()
@@ -324,6 +330,7 @@ pub fn mapping_create(state: State<'_, AppState>, input: MappingInput) -> Result
     let (local_path, gist_filename) = validate_mapping(&state, &input, None)?;
     let mapping = Mapping {
         id: uuid::Uuid::new_v4().to_string(),
+        name: input.name.trim().to_string(),
         local_path,
         account_id: input.account_id,
         gist_id: input.gist_id.trim().to_string(),
@@ -392,6 +399,7 @@ pub fn mapping_update(
                 return Err(ipc_err("MAPPING_NOT_FOUND", "映射不存在"));
             };
             rebuild = m.local_path != local_path || m.enabled != input.enabled;
+            m.name = input.name.trim().to_string();
             m.local_path = local_path;
             m.account_id = input.account_id;
             m.gist_id = input.gist_id.trim().to_string();
