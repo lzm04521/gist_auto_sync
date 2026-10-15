@@ -5,6 +5,7 @@ pub mod model;
 pub mod provider;
 pub mod secrets;
 pub mod sync;
+pub mod synclog;
 
 use std::sync::Arc;
 

@@ -15,7 +15,8 @@ use crate::sync::history::HistoryReason;
 use crate::sync::snapshot::{SelfWriteGuard, Side, SnapshotState, SnapshotStore};
 
 /// 触发源
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Trigger {
     /// watcher 防抖后的本地稳定事件
     LocalSettled,
