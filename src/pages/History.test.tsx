@@ -71,9 +71,23 @@ beforeEach(() => {
 });
 
 describe("History page", () => {
+  it("映射下拉优先显示映射名称", async () => {
+    mocks.mappingList.mockResolvedValue([
+      {
+        ...mappingView,
+        mapping: { ...mappingView.mapping, name: "工作笔记" },
+      },
+    ]);
+    renderPage();
+    expect(
+      await screen.findByText("工作笔记", { selector: ".ant-select-selection-item" }),
+    ).toBeInTheDocument();
+  });
+
   it("渲染映射下拉与本地归档列表：时间、侧、原因、大小", async () => {
     renderPage();
-    expect(await screen.findByText("C:/notes/todo.md")).toBeInTheDocument();
+    // 下拉 label 为显示名回退链（name 空 → gist 文件名）
+    expect(await screen.findByText("todo.md")).toBeInTheDocument();
     expect(await screen.findByText("2026-10-14 12:30:45")).toBeInTheDocument();
     expect(screen.getByText("本地")).toBeInTheDocument();
     expect(screen.getByText("下载覆盖")).toBeInTheDocument();
