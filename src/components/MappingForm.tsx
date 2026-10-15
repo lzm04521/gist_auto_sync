@@ -23,6 +23,21 @@ export function fileNameOf(path: string): string {
   return parts.length > 0 ? parts[parts.length - 1] : path;
 }
 
+/** gist 下拉选项文案：标题 ?? 描述（超 30 字符截断）· 首文件名（多文件计数）· 日期 */
+export function gistOptionLabel(g: GistSummary): string {
+  const truncate = (s: string) => {
+    const chars = [...s];
+    return chars.length > 30 ? `${chars.slice(0, 30).join("")}…` : s;
+  };
+  const primary = g.title ?? g.description;
+  const parts: string[] = [primary ? truncate(primary) : `#${g.id.slice(0, 8)}`];
+  if (g.files.length > 0) {
+    parts.push(g.files.length > 1 ? `${g.files[0]} +${g.files.length - 1}` : g.files[0]);
+  }
+  parts.push(g.updatedAt.slice(0, 10));
+  return parts.join(" · ");
+}
+
 interface Props {
   open: boolean;
   editing: Mapping | null;
@@ -209,7 +224,7 @@ export default function MappingForm({ open, editing, onCancel, onSaved }: Props)
               placeholder={t("mappings.loadingGists")}
               options={gists.map((g) => ({
                 value: g.id,
-                label: `${g.description ?? g.id} · ${g.updatedAt.slice(0, 10)}`,
+                label: gistOptionLabel(g),
               }))}
             />
           )}

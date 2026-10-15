@@ -19,7 +19,40 @@ vi.mock("../api/ipc", async () => {
 });
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.dialogOpen }));
 
-import MappingForm from "./MappingForm";
+import MappingForm, { gistOptionLabel } from "./MappingForm";
+
+describe("gistOptionLabel", () => {
+  const base = {
+    id: "abcdefgh1234",
+    description: null,
+    title: null,
+    updatedAt: "2026-10-15T08:00:00Z",
+    files: [] as string[],
+  };
+
+  it("标题优先于描述", () => {
+    expect(
+      gistOptionLabel({ ...base, title: "配置笔记", description: "描述" }),
+    ).toBe("配置笔记 · 2026-10-15");
+  });
+
+  it("超长中文描述按字符截断为 30 字", () => {
+    const long = "笔".repeat(31);
+    expect(gistOptionLabel({ ...base, description: long })).toBe(
+      `${"笔".repeat(30)}… · 2026-10-15`,
+    );
+  });
+
+  it("含首文件名与多文件计数", () => {
+    expect(
+      gistOptionLabel({ ...base, title: "t", files: ["a.md", "b.md", "c.md"] }),
+    ).toBe("t · a.md +2 · 2026-10-15");
+  });
+
+  it("全无时回退短 id", () => {
+    expect(gistOptionLabel(base)).toBe("#abcdefgh · 2026-10-15");
+  });
+});
 
 const account = {
   id: "acc1",
