@@ -45,11 +45,50 @@ pub struct CycleOutcome {
     pub status: MappingStatus,
     pub message: Option<String>,
     pub rate_hint: Option<Duration>,
+    /// 真正发生写入（上传/下载成功）时的变化统计；None=本次循环无写入
+    pub write: Option<WriteStat>,
+}
+
+/// 一次写入的变化统计（added/removed 为 None 表示内容超限未统计）
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WriteStat {
+    pub direction: crate::synclog::LogDirection,
+    pub added: Option<u32>,
+    pub removed: Option<u32>,
 }
 
 impl CycleOutcome {
     fn plain(status: MappingStatus) -> Self {
-        Self { status, message: None, rate_hint: None }
+        Self { status, message: None, rate_hint: None, write: None }
+    }
+}
+
+/// 行级变化统计：先与哈希比较同基准归一化行尾，再逐行 diff，
+/// 返回 (新增行数, 删除行数)；内容合计超 4MB 不统计（防大文件 diff 卡顿）
+pub fn line_diff(old: &str, new: &str) -> Option<(u32, u32)> {
+    const SIZE_CAP: usize = 4 * 1024 * 1024;
+    if old.len() + new.len() > SIZE_CAP {
+        return None;
+    }
+    let old_n = normalize(old);
+    let new_n = normalize(new);
+    let diff = similar::TextDiff::from_lines(old_n.as_str(), new_n.as_str());
+    let (mut added, mut removed) = (0u32, 0u32);
+    for change in diff.iter_all_changes() {
+        match change.tag() {
+            similar::ChangeTag::Insert => added += 1,
+            similar::ChangeTag::Delete => removed += 1,
+            similar::ChangeTag::Equal => {}
+        }
+    }
+    Some((added, removed))
+}
+
+/// 由 line_diff 组装 WriteStat（超限未统计时 added/removed 均为 None）
+fn write_stat(direction: crate::synclog::LogDirection, old: &str, new: &str) -> WriteStat {
+    match line_diff(old, new) {
+        Some((added, removed)) => WriteStat { direction, added: Some(added), removed: Some(removed) },
+        None => WriteStat { direction, added: None, removed: None },
     }
 }
 
@@ -387,6 +426,8 @@ pub async fn run_sync_cycle_with_hint(
             }
             // 上传规范化内容（CRLF→LF），快照以回读为准
             let content = normalize(local_raw.as_deref().expect("Upload 分支必有本地内容"));
+            // 变化统计：远端上一版（远端无该文件视为空）→ 本次上传内容
+            let stat = write_stat(crate::synclog::LogDirection::Upload, remote_raw.as_deref().unwrap_or(""), &content);
             tracing::info!("[{}] 上传 {} → gist {}（{} 字节）", mapping.id, mapping.gist_filename, mapping.gist_id, content.len());
             match provider
                 .update_file(&mapping.gist_id, &mapping.gist_filename, &content)
@@ -456,7 +497,7 @@ pub async fn run_sync_cycle_with_hint(
                         );
                     }
                     tracing::info!("[{}] 上传完成", mapping.id);
-                    emit_outcome(ctx, mapping, MappingStatus::Idle, None, true, None)
+                    emit_outcome_stat(ctx, mapping, MappingStatus::Idle, None, true, None, stat)
                 }
                 Err(e) => {
                     tracing::error!("[{}] 上传失败: {e}", mapping.id);
@@ -496,6 +537,8 @@ pub async fn run_sync_cycle_with_hint(
             // 写盘保留远端原始字节（spec §6.5）；原子替换（temp + rename 同目录同卷），
             // 写一半失败不会留下截断文件；temp 路径与映射路径不同，watcher 事件天然不命中映射
             let raw = remote_raw.clone().expect("Download 分支必有远端内容");
+            // 变化统计：本地上一版（本地无文件视为空）→ 远端内容
+            let stat = write_stat(crate::synclog::LogDirection::Download, local_raw.as_deref().unwrap_or(""), &raw);
             tracing::info!("[{}] 下载 gist {}/{} → {}（{} 字节）", mapping.id, mapping.gist_id, mapping.gist_filename, mapping.local_path, raw.len());
             if let Err(e) = write_local_atomic(&mapping.local_path, &raw) {
                 return emit_outcome(
@@ -531,7 +574,7 @@ pub async fn run_sync_cycle_with_hint(
                 );
             }
             tracing::info!("[{}] 下载完成", mapping.id);
-            emit_outcome(ctx, mapping, MappingStatus::Idle, None, true, None)
+            emit_outcome_stat(ctx, mapping, MappingStatus::Idle, None, true, None, stat)
         }
     }
 }
@@ -596,7 +639,22 @@ fn emit_outcome(
     rate_hint: Option<Duration>,
 ) -> CycleOutcome {
     let status = emit_status(ctx, mapping, status, message.clone(), synced);
-    CycleOutcome { status, message, rate_hint }
+    CycleOutcome { status, message, rate_hint, write: None }
+}
+
+/// emit_outcome 的写入变体：成功写入（上传/下载完成）时附带变化统计
+fn emit_outcome_stat(
+    ctx: &SyncCtx,
+    mapping: &Mapping,
+    status: MappingStatus,
+    message: Option<String>,
+    synced: bool,
+    rate_hint: Option<Duration>,
+    stat: WriteStat,
+) -> CycleOutcome {
+    let mut out = emit_outcome(ctx, mapping, status, message, synced, rate_hint);
+    out.write = Some(stat);
+    out
 }
 
 #[cfg(test)]
@@ -836,6 +894,50 @@ mod tests {
         let status = run_sync_cycle(&f.ctx, &f.mapping, Trigger::LocalSettled).await;
         assert_eq!(status, MappingStatus::Idle);
         assert_eq!(f.fake.calls(), calls, "自写抑制：不应产生任何 API 调用");
+    }
+
+    // ── 变化统计（V0.5）──────────────────────────────────────────────
+
+    #[test]
+    fn line_diff_counts_added_removed_and_modified() {
+        assert_eq!(line_diff("a\nb\n", "a\nb\nc\n"), Some((1, 0)));
+        assert_eq!(line_diff("a\nb\nc\n", "a\nb\n"), Some((0, 1)));
+        assert_eq!(line_diff("a\nx\nc\n", "a\ny\nc\n"), Some((1, 1)), "改行计 1+1");
+        assert_eq!(line_diff("", "x\ny\n"), Some((2, 0)), "全新内容");
+    }
+
+    #[test]
+    fn line_diff_ignores_eol_only_change() {
+        // 与哈希比较同基准：先归一化行尾，纯 CRLF/LF 差异不算变化
+        assert_eq!(line_diff("a\r\nb\r\n", "a\nb\n"), Some((0, 0)));
+    }
+
+    #[test]
+    fn line_diff_returns_none_over_size_cap() {
+        let big = "x\n".repeat(3 * 1024 * 1024);
+        assert!(line_diff(&big, "a").is_none(), "超 4MB 不统计");
+    }
+
+    #[tokio::test]
+    async fn upload_cycle_carries_write_stat() {
+        use crate::synclog::LogDirection;
+        let f = fixture("a\nb\n", "a\n", Some("a\n"));
+        let out = run_sync_cycle_with_hint(&f.ctx, &f.mapping, Trigger::Poll).await;
+        let w = out.write.expect("上传成功应带变化统计");
+        assert_eq!(w.direction, LogDirection::Upload);
+        assert_eq!(w.added, Some(1), "远端 a→a+b：新增 1 行");
+        assert_eq!(w.removed, Some(0));
+    }
+
+    #[tokio::test]
+    async fn download_cycle_carries_write_stat() {
+        use crate::synclog::LogDirection;
+        let f = fixture("a\n", "a\nb\n", Some("a\n"));
+        let out = run_sync_cycle_with_hint(&f.ctx, &f.mapping, Trigger::Poll).await;
+        let w = out.write.expect("下载成功应带变化统计");
+        assert_eq!(w.direction, LogDirection::Download);
+        assert_eq!(w.added, Some(1));
+        assert_eq!(w.removed, Some(0));
     }
 
     #[tokio::test]
