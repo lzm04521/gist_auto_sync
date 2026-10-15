@@ -43,6 +43,13 @@ pub struct GlobalSettings {
     pub auto_start: bool,
     pub log_level: String,
     pub language: String,
+    /// 启动后是否自动检查应用更新（V0.4 新增，旧配置缺键时默认开启）
+    #[serde(default = "default_auto_check_update")]
+    pub auto_check_update: bool,
+}
+
+fn default_auto_check_update() -> bool {
+    true
 }
 
 impl Default for GlobalSettings {
@@ -53,6 +60,7 @@ impl Default for GlobalSettings {
             auto_start: true,
             log_level: "info".to_string(),
             language: "zh-CN".to_string(),
+            auto_check_update: true,
         }
     }
 }

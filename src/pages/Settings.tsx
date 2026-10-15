@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   App as AntApp,
   Button,
@@ -27,11 +27,14 @@ export default function Settings() {
   const { message } = AntApp.useApp();
   const [form] = Form.useForm<FormValues>();
   const [loaded, setLoaded] = useState(false);
+  // 自动检查更新的开关在"关于"页管理，设置页保存时原样透传，避免丢字段
+  const autoCheckRef = useRef(true);
 
   useEffect(() => {
     settingsGet()
       .then((s) => {
         form.setFieldsValue(s);
+        autoCheckRef.current = s.autoCheckUpdate;
         setLoaded(true);
       })
       .catch((e) => void message.error(ipcErrorMessage(e, t)));
@@ -53,6 +56,7 @@ export default function Settings() {
         autoStart: values.autoStart,
         logLevel: values.logLevel,
         language: values.language,
+        autoCheckUpdate: autoCheckRef.current,
       };
       await settingsUpdate(settings);
       void message.success(t("settings.saved"));

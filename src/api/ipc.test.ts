@@ -61,6 +61,7 @@ describe("ipc bindings", () => {
       autoStart: true,
       logLevel: "info",
       language: "zh-CN",
+      autoCheckUpdate: true,
     };
     await settingsUpdate(settings);
     expect(invokeMock).toHaveBeenCalledWith("settings_update", { settings });
