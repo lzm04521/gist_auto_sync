@@ -142,6 +142,8 @@ describe("Mappings page", () => {
     await userEvent.click(screen.getByRole("button", { name: /^OK$|^确\s*定$/ }));
     await waitFor(() => expect(mocks.mappingCreate).toHaveBeenCalledTimes(1));
     expect(mocks.mappingCreate).toHaveBeenCalledWith({
+      // 名称留空时自动跟随 Gist 内文件名（V0.5 行为）
+      name: "todo.md",
       localPath: "C:/notes/todo.md",
       accountId: "acc1",
       gistId: "abc123",

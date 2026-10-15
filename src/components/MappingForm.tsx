@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import { App as AntApp, Button, Form, Input, Modal, Radio, Select, Switch } from "antd";
+import { useEffect, useState } from "react";import { App as AntApp, Button, Form, Input, Modal, Radio, Select, Switch } from "antd";
 import { FolderOpenOutlined } from "@ant-design/icons";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
@@ -8,6 +7,7 @@ import { ipcErrorMessage } from "../i18n/errors";
 import type { Account, GistSummary, Mapping } from "../types";
 
 export interface FormValues {
+  name?: string;
   localPath: string;
   accountId: string;
   gistMode: "select" | "manual";
@@ -36,10 +36,13 @@ export default function MappingForm({ open, editing, onCancel, onSaved }: Props)
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [gists, setGists] = useState<GistSummary[]>([]);
   const [loadingGists, setLoadingGists] = useState(false);
+  // 名称是否被用户手动编辑过：true 后不再自动跟随文件名（用户意图优先）
+  const [nameDirty, setNameDirty] = useState(false);
   const [form] = Form.useForm<FormValues>();
   const accountId = Form.useWatch("accountId", form);
   const gistMode = Form.useWatch("gistMode", form);
   const localPath = Form.useWatch("localPath", form);
+  const gistFilename = Form.useWatch("gistFilename", form);
 
   useEffect(() => {
     void accountList()
@@ -74,6 +77,7 @@ export default function MappingForm({ open, editing, onCancel, onSaved }: Props)
     if (!open) return;
     if (editing) {
       form.setFieldsValue({
+        name: editing.name,
         localPath: editing.localPath,
         accountId: editing.accountId,
         gistMode: "manual",
@@ -84,6 +88,7 @@ export default function MappingForm({ open, editing, onCancel, onSaved }: Props)
       });
     } else {
       form.resetFields();
+      setNameDirty(false);
       form.setFieldsValue({
         gistMode: "select",
         uploadEnabled: true,
@@ -97,6 +102,12 @@ export default function MappingForm({ open, editing, onCancel, onSaved }: Props)
     if (!open || editing || !localPath) return;
     form.setFieldValue("gistFilename", fileNameOf(localPath));
   }, [localPath, open, editing, form]);
+
+  // Gist 内文件名变化时，未被手改过的名称自动跟随
+  useEffect(() => {
+    if (!open || editing || !gistFilename || nameDirty) return;
+    form.setFieldValue("name", gistFilename);
+  }, [gistFilename, open, editing, nameDirty, form]);
 
   const chooseFile = async () => {
     try {
@@ -114,6 +125,7 @@ export default function MappingForm({ open, editing, onCancel, onSaved }: Props)
     if (!values) return; // 校验失败：antd 已在字段下方展示错误提示
     try {
       const payload = {
+        name: values.name ?? "",
         localPath: values.localPath,
         accountId: values.accountId,
         gistId: values.gistId,
@@ -208,6 +220,13 @@ export default function MappingForm({ open, editing, onCancel, onSaved }: Props)
           extra={t("mappings.gistFilenameHint")}
         >
           <Input />
+        </Form.Item>
+        <Form.Item
+          name="name"
+          label={t("mappings.name")}
+          extra={t("mappings.nameHint")}
+        >
+          <Input onChange={() => setNameDirty(true)} />
         </Form.Item>
         <Form.Item label={t("mappings.direction")} style={{ marginBottom: 0 }}>
           <Form.Item name="uploadEnabled" valuePropName="checked" style={{ display: "inline-block", marginRight: 24 }} noStyle={false}>

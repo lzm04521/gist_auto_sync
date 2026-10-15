@@ -61,6 +61,8 @@
     "gistManual": "手动输入 ID",
     "gistFilename": "Gist 内文件名",
     "gistFilenameHint": "默认与本地文件名相同",
+    "name": "名称",
+    "nameHint": "留空时自动跟随 Gist 内文件名",
     "upload": "本地 → 远端",
     "download": "远端 → 本地",
     "direction": "同步方向",

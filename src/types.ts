@@ -12,6 +12,7 @@ export interface Account {
 
 export interface Mapping {
   id: string;
+  name: string;
   localPath: string;
   accountId: string;
   gistId: string;
@@ -72,6 +73,7 @@ export interface AccountInput {
 }
 
 export interface MappingInput {
+  name: string;
   localPath: string;
   accountId: string;
   gistId: string;

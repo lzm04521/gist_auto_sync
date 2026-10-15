@@ -61,6 +61,8 @@
     "gistManual": "Enter ID",
     "gistFilename": "Filename in gist",
     "gistFilenameHint": "Defaults to the local filename",
+    "name": "Name",
+    "nameHint": "Auto-fills from the gist filename when empty",
     "upload": "Local → Remote",
     "download": "Remote → Local",
     "direction": "Direction",
