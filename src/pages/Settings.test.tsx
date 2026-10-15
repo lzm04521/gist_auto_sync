@@ -24,6 +24,7 @@ const defaults = {
   autoStart: true,
   logLevel: "info",
   language: "zh-CN",
+  autoCheckUpdate: true,
 };
 
 beforeEach(() => {

@@ -117,6 +117,32 @@ mod tests {
     }
 
     #[test]
+    fn legacy_settings_without_auto_check_defaults_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // V0.4 之前的配置文件没有 autoCheckUpdate 键，加载必须成功且默认开启
+        let legacy = serde_json::json!({
+            "settings": {
+                "debounceSeconds": 3,
+                "pollIntervalMinutes": 5,
+                "autoStart": true,
+                "logLevel": "info",
+                "language": "zh-CN"
+            },
+            "accounts": [],
+            "mappings": []
+        });
+        fs::write(&path, legacy.to_string()).unwrap();
+        let store = ConfigStore::load_from(path).unwrap();
+        assert!(store.read().settings.auto_check_update);
+    }
+
+    #[test]
+    fn default_settings_auto_check_on() {
+        assert!(crate::model::GlobalSettings::default().auto_check_update);
+    }
+
+    #[test]
     fn corrupted_json_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");

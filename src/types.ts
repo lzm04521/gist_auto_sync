@@ -27,6 +27,7 @@ export interface GlobalSettings {
   autoStart: boolean;
   logLevel: string;
   language: string;
+  autoCheckUpdate: boolean;
 }
 
 export interface UserInfo {
