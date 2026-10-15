@@ -29,7 +29,8 @@ export default function About() {
 
   // 手动检查的结果驱动（启动自动检查独立走 useStartupAutoCheck，不经此处）
   useEffect(() => {
-    if (updater.status === "available") {
+    if (updater.status === "available" || updater.status === "downloaded") {
+      // downloaded 也重开弹窗：下载中关闭弹窗的用户不失去"立即重启"入口
       setModalOpen(true);
     } else if (updater.status === "upToDate") {
       void message.success(t("about.upToDate"));
@@ -41,6 +42,11 @@ export default function About() {
   }, [updater.status, updater.error, message, t]);
 
   const onCheck = async () => {
+    // 已下载待重启：重开弹窗即可，不重复检查下载同一版本（插件按运行版本比较，拦不住重复）
+    if (updater.status === "downloaded") {
+      setModalOpen(true);
+      return;
+    }
     lastActionRef.current = "check";
     await updater.check();
   };
@@ -53,7 +59,10 @@ export default function About() {
 
   const closeModal = () => {
     setModalOpen(false);
-    updater.reset();
+    // 下载中/已下载不重置：在飞下载完成后由 effect 重开弹窗，避免与后台更新脱钩
+    if (updater.status !== "downloading" && updater.status !== "downloaded") {
+      updater.reset();
+    }
   };
 
   const onAutoCheckChange = async (checked: boolean) => {

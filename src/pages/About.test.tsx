@@ -156,6 +156,49 @@ describe("About 页", () => {
     expect(await screen.findByText("设置已保存")).toBeInTheDocument();
   });
 
+  it("下载中点稍后不清状态，完成自动重开弹窗可一键重启", async () => {
+    const user = userEvent.setup();
+    updaterState = { ...updaterState, status: "available", version: "0.4.1", notes: "修复" };
+    const view = renderAbout();
+    await screen.findByRole("button", { name: /立即更新/ });
+
+    // 下载中关闭弹窗：状态不得被重置
+    updaterState = { ...updaterState, status: "downloading", progress: 50 };
+    view.rerender(
+      <AntApp>
+        <About />
+      </AntApp>,
+    );
+    await user.click(screen.getByRole("button", { name: /稍后|稍 后/ }));
+    expect(mocks.reset).not.toHaveBeenCalled();
+
+    // 下载完成：弹窗自动重开，重启入口不丢失
+    updaterState = { ...updaterState, status: "downloaded", progress: 100 };
+    view.rerender(
+      <AntApp>
+        <About />
+      </AntApp>,
+    );
+    const relaunchBtn = await screen.findByRole("button", { name: /立即重启/ });
+    await user.click(relaunchBtn);
+    expect(mocks.relaunch).toHaveBeenCalledTimes(1);
+  });
+
+  it("已下载待重启时再点检查更新重开弹窗，不重复检查与下载", async () => {
+    const user = userEvent.setup();
+    updaterState = { ...updaterState, status: "downloaded", version: "0.4.1", progress: 100 };
+    const view = renderAbout();
+    // downloaded 首次进入即弹出重启提示，先关闭
+    await screen.findByRole("button", { name: /立即重启/ });
+    await user.click(screen.getByRole("button", { name: /稍后|稍 后/ }));
+
+    await user.click(screen.getByRole("button", { name: /检查更新/ }));
+    expect(mocks.check).not.toHaveBeenCalled();
+    expect(mocks.downloadAndInstall).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: /立即重启/ })).toBeInTheDocument();
+    view.unmount();
+  });
+
   it("英文文案跟随语言切换", async () => {
     i18n.changeLanguage("en");
     renderAbout();
