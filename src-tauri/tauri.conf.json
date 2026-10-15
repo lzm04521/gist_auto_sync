@@ -25,7 +25,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5RTg5MjJDM0RERjdEQjMKUldTemZkODlMSkxvR2Q5VmE4QXovODE1SGZsZEMwZjJCcWEwQlV0QkVLVTZEcWNWTFF0eHUvSEYK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5RTg5MjJDM0RERjdEQjMKUldTemZkODlMSkxvR2Q5VmE4QXovODE1SGZsZEMwZjJCcWEwQlV0QkVLVTZEcWNWTFF0eFUvSEYK",
       "endpoints": [
         "https://github.com/lzm04521/gist_auto_sync/releases/latest/download/latest.json"
       ]
