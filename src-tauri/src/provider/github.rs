@@ -87,6 +87,7 @@ fn to_summary(g: GhGist) -> GistSummary {
     GistSummary {
         id: g.id,
         description: g.description,
+        title: None,
         updated_at: g.updated_at,
         files: g
             .files
@@ -344,6 +345,21 @@ mod tests {
                 }
             }
         })
+    }
+
+    #[tokio::test]
+    async fn list_gists_summary_title_always_none() {
+        // GitHub gist 无 title 概念：summary.title 恒 None（Opengist 专用字段）
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/gists"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                gist_json("g1", "d", "a.txt", Some("x"), None)
+            ])))
+            .mount(&server)
+            .await;
+        let gists = provider(&server).list_gists(None).await.unwrap();
+        assert_eq!(gists[0].title, None);
     }
 
     #[tokio::test]

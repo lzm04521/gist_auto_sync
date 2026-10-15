@@ -39,6 +39,8 @@ export interface UserInfo {
 export interface GistSummary {
   id: string;
   description: string | null;
+  /** Opengist 的 gist 标题；GitHub 恒 null */
+  title: string | null;
   updatedAt: string;
   files: string[];
 }

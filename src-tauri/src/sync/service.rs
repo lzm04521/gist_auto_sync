@@ -735,7 +735,7 @@ mod tests {
             ids.dedup();
             Ok(ids
                 .into_iter()
-                .map(|id| GistSummary { id, description: None, updated_at: Utc::now(), files: vec![] })
+                .map(|id| GistSummary { id, description: None, title: None, updated_at: Utc::now(), files: vec![] })
                 .collect())
         }
         async fn get_gist(
