@@ -108,3 +108,29 @@ export interface HistoryPreview {
   historical: string;
   currentLocal: string;
 }
+
+// ── 同步操作日志（V0.5）────────────────────────────────────────────────
+
+export type LogTrigger =
+  | "localSettled"
+  | "poll"
+  | "manualUpload"
+  | "manualDownload";
+
+export type LogDirection = "upload" | "download";
+
+export type LogOutcome =
+  | { kind: "changed"; added: number | null; removed: number | null }
+  | { kind: "noChange" }
+  | { kind: "conflict" }
+  | { kind: "error"; code: string };
+
+export interface SyncLogEntry {
+  ts: string;
+  mappingId: string;
+  /** 显示名快照（映射删除后仍可读） */
+  label: string;
+  trigger: LogTrigger;
+  direction: LogDirection | null;
+  outcome: LogOutcome;
+}

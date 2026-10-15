@@ -13,6 +13,7 @@ import type {
   MappingStatus,
   MappingView,
   StatusEvent,
+  SyncLogEntry,
   UserInfo,
 } from "../types";
 
@@ -105,6 +106,12 @@ export const syncSetPaused = (paused: boolean) =>
   unwrap(invoke<void>("sync_set_paused", { paused }));
 
 export const syncIsPaused = () => unwrap(invoke<boolean>("sync_is_paused"));
+
+// ── 同步操作日志（V0.5）────────────────────────────────────────────────
+
+/** 同步流水查询（新在前；limit 缺省全量） */
+export const syncLogList = (limit?: number) =>
+  unwrap(invoke<SyncLogEntry[]>("log_list", { limit: limit ?? null }));
 
 // ── 设置 ─────────────────────────────────────────────────────────────
 

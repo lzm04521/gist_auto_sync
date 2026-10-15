@@ -220,7 +220,7 @@ describe("App 菜单集成", () => {
 
     const items = await screen.findAllByRole("menuitem");
     const labels = items.map((el) => el.textContent);
-    expect(labels).toEqual(["仪表盘", "同步映射", "历史", "账号", "设置", "关于"]);
+    expect(labels).toEqual(["仪表盘", "同步映射", "历史", "日志", "账号", "设置", "关于"]);
 
     await user.click(screen.getByText("关于"));
     expect(await screen.findByText("0.4.0")).toBeInTheDocument();

@@ -5,6 +5,7 @@ import enUS from "antd/locale/en_US";
 import {
   AppstoreOutlined,
   CloudSyncOutlined,
+  FileTextOutlined,
   HistoryOutlined,
   InfoCircleOutlined,
   SettingOutlined,
@@ -16,6 +17,7 @@ import About from "./pages/About";
 import { useStartupAutoCheck } from "./hooks/useUpdater";
 import Dashboard from "./pages/Dashboard";
 import History from "./pages/History";
+import Logs from "./pages/Logs";
 import Mappings from "./pages/Mappings";
 import Settings from "./pages/Settings";
 
@@ -25,6 +27,7 @@ const menuItems = [
   { key: "/", icon: <AppstoreOutlined />, ns: "menu.dashboard" },
   { key: "/mappings", icon: <CloudSyncOutlined />, ns: "menu.mappings" },
   { key: "/history", icon: <HistoryOutlined />, ns: "menu.history" },
+  { key: "/logs", icon: <FileTextOutlined />, ns: "menu.logs" },
   { key: "/accounts", icon: <UserOutlined />, ns: "menu.accounts" },
   { key: "/settings", icon: <SettingOutlined />, ns: "menu.settings" },
   { key: "/about", icon: <InfoCircleOutlined />, ns: "menu.about" },
@@ -75,6 +78,7 @@ function AppLayout() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/mappings" element={<Mappings />} />
             <Route path="/history" element={<History />} />
+            <Route path="/logs" element={<Logs />} />
             <Route path="/accounts" element={<Accounts />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/about" element={<About />} />
