@@ -18,6 +18,7 @@ pub struct AppState {
     pub config: Arc<ConfigStore>,
     pub snapshots: Arc<SnapshotStore>,
     pub engine: Arc<Engine>,
+    pub synclog: Arc<crate::synclog::SyncLogStore>,
     pub log_dir: std::path::PathBuf,
     /// 日志级别热更新句柄（初始化失败时为 None，级别改动需重启生效）
     pub log_reload: Option<crate::logging::LogReloadHandle>,
@@ -509,6 +510,12 @@ pub fn sync_set_paused(state: State<'_, AppState>, paused: bool) {
 #[tauri::command]
 pub fn sync_is_paused(state: State<'_, AppState>) -> bool {
     state.engine.is_global_paused()
+}
+
+/// 同步操作流水查询（新在前；limit=None 全量，V0.5 日志页用）
+#[tauri::command]
+pub fn log_list(state: State<'_, AppState>, limit: Option<usize>) -> Vec<crate::synclog::SyncLogEntry> {
+    state.synclog.tail(limit)
 }
 
 /// 回滚到本地归档版本（本地与远端同时恢复）

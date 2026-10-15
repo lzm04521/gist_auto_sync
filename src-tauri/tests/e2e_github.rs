@@ -62,6 +62,9 @@ async fn setup() -> (SyncCtx, Mapping, tempfile::TempDir) {
         providers,
         guard: SelfWriteGuard::new(),
         sink: Arc::new(VecSink::default()),
+        synclog: Arc::new(gist_auto_sync_lib::synclog::SyncLogStore::load_from(
+            dir.path().join("synclog.jsonl"),
+        )),
     };
 
     let mapping = Mapping {

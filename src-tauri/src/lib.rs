@@ -76,12 +76,16 @@ pub fn run() {
 
             let sink: Arc<dyn sync::engine::StatusSink> =
                 Arc::new(commands::IpcSink { app: handle.clone() });
+            let synclog = Arc::new(synclog::SyncLogStore::load_from(
+                config_dir.join("synclog").join("synclog.jsonl"),
+            ));
             let ctx = Arc::new(SyncCtx {
                 config: config.clone(),
                 snapshots: snapshots.clone(),
                 providers: ProviderCache::new(),
                 guard: SelfWriteGuard::new(),
                 sink,
+                synclog: synclog.clone(),
             });
             let engine = Arc::new(
                 Engine::new(ctx, config_dir.join("statuses.json"))
@@ -92,6 +96,7 @@ pub fn run() {
                 config,
                 snapshots,
                 engine: engine.clone(),
+                synclog,
                 log_dir,
                 log_reload,
             });
@@ -138,6 +143,7 @@ pub fn run() {
             commands::sync_manual,
             commands::sync_set_paused,
             commands::sync_is_paused,
+            commands::log_list,
             commands::history_rollback_local,
             commands::history_rollback_remote,
             commands::history_list,

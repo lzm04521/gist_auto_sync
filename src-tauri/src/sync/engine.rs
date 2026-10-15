@@ -164,6 +164,8 @@ pub struct SyncCtx {
     pub providers: ProviderCache,
     pub guard: SelfWriteGuard,
     pub sink: Arc<dyn StatusSink>,
+    /// 同步操作流水（V0.5）：引擎出口按规则落库
+    pub synclog: Arc<crate::synclog::SyncLogStore>,
 }
 
 /// 单次同步循环（spec §6.1/6.2/6.5）。返回最终状态；过程经 sink 推送。
@@ -817,6 +819,9 @@ mod tests {
             providers,
             guard: SelfWriteGuard::new(),
             sink: Arc::new(VecSink::default()),
+            synclog: Arc::new(crate::synclog::SyncLogStore::load_from(
+                dir.path().join("synclog.jsonl"),
+            )),
         };
         let mapping = Mapping {
             id: "m1".into(),

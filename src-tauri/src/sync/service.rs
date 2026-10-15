@@ -11,8 +11,8 @@ use tokio::sync::mpsc;
 use crate::model::Mapping;
 use crate::sync::compare::{normalize, sha256_hex};
 use crate::sync::engine::{
-    emit_status, ext_of, run_sync_cycle_with_hint, status_msg, write_local_atomic, MappingStatus,
-    SyncCtx, Trigger,
+    emit_status, ext_of, run_sync_cycle_with_hint, status_msg, write_local_atomic, CycleOutcome,
+    MappingStatus, SyncCtx, Trigger,
 };
 use crate::sync::history::HistoryReason;
 use crate::sync::snapshot::{Side, SnapshotState, SyncDirection};
@@ -289,6 +289,12 @@ impl Engine {
         };
 
         let outcome = run_sync_cycle_with_hint(&self.ctx, m, trigger).await;
+        // 操作流水落库（设计 §4.5：手动全记，自动只记有变化/冲突/失败；失败不阻塞同步）
+        if let Some(entry) = Self::log_entry_for(m, trigger, &outcome)
+            && let Err(e) = self.ctx.synclog.append(entry)
+        {
+            tracing::warn!("[{}] 写入同步流水失败（不影响同步）: {e}", m.id);
+        }
         self.record_status(&m.id, outcome.status, outcome.message);
         let status = outcome.status;
         let is_auto = matches!(trigger, Trigger::LocalSettled | Trigger::Poll);
@@ -307,6 +313,42 @@ impl Engine {
                 .remove(&m.id);
         }
         status
+    }
+
+    /// 按记录规则构造流水条目（设计 §4.5）：
+    /// 有写入 → Changed（带方向与统计）；冲突/失败 → 始终记录；
+    /// 无写入时手动 → NoChange；无写入时自动 → 不记录（返回 None）
+    fn log_entry_for(m: &Mapping, trigger: Trigger, out: &CycleOutcome) -> Option<crate::synclog::SyncLogEntry> {
+    use crate::synclog::{LogOutcome, SyncLogEntry};
+    let manual = matches!(trigger, Trigger::ManualUpload | Trigger::ManualDownload);
+    let outcome = if let Some(w) = &out.write {
+        LogOutcome::Changed { added: w.added, removed: w.removed }
+    } else {
+        match out.status {
+            MappingStatus::Conflict => LogOutcome::Conflict,
+            MappingStatus::Error | MappingStatus::Missing => {
+                LogOutcome::Error { code: Self::extract_status_code(out.message.as_deref()) }
+            }
+            _ if manual => LogOutcome::NoChange,
+            _ => return None,
+        }
+    };
+    Some(SyncLogEntry {
+        ts: chrono::Utc::now(),
+        mapping_id: m.id.clone(),
+        label: m.display_name().to_string(),
+        trigger,
+        direction: out.write.as_ref().map(|w| w.direction),
+        outcome,
+    })
+    }
+
+    /// 从引擎状态消息 `{"code":"...","detail":"..."}` 提取 code；提取失败用 "unknown"
+    fn extract_status_code(message: Option<&str>) -> String {
+        message
+            .and_then(|msg| serde_json::from_str::<serde_json::Value>(msg).ok())
+            .and_then(|v| v.get("code").and_then(|c| c.as_str()).map(String::from))
+            .unwrap_or_else(|| "unknown".to_string())
     }
 
     /// 退避重试（独立方法避免 spawn 块与 tracked 形成 Send 循环依赖）
@@ -786,6 +828,7 @@ mod tests {
     struct Fixture {
         engine: Arc<Engine>,
         fake: Arc<FakeProvider>,
+        synclog: Arc<crate::synclog::SyncLogStore>,
         local_path: PathBuf,
         statuses_path: PathBuf,
         #[allow(dead_code)]
@@ -837,6 +880,7 @@ mod tests {
         }
         let fake = Arc::new(FakeProvider::new());
         fake.set_file("gist1", "notes.md", remote);
+        let synclog = Arc::new(crate::synclog::SyncLogStore::load_from(dir.path().join("synclog.jsonl")));
         let providers = crate::sync::engine::ProviderCache::new();
         providers.insert("acc1", fake.clone());
         let ctx = Arc::new(SyncCtx {
@@ -845,10 +889,75 @@ mod tests {
             providers,
             guard: SelfWriteGuard::new(),
             sink: Arc::new(VecSink::default()),
+            synclog: synclog.clone(),
         });
         let statuses_path = dir.path().join("statuses.json");
         let engine = Arc::new(Engine::new(ctx, statuses_path.clone()).unwrap());
-        Fixture { engine, fake, local_path, statuses_path, dir }
+        Fixture { engine, fake, synclog, local_path, statuses_path, dir }
+    }
+
+    // ── 操作流水落库（V0.5）──────────────────────────────────────────
+
+    use crate::synclog::{LogDirection, LogOutcome};
+
+    #[tokio::test]
+    async fn manual_noop_records_no_change() {
+        let f = fixture("a\n", "a\n", Some("a\n"));
+        f.engine.run_one("m1", Trigger::ManualUpload).await;
+        let entries = f.synclog.tail(None);
+        assert_eq!(entries.len(), 1, "手动同步无变化也要记录");
+        assert_eq!(entries[0].outcome, LogOutcome::NoChange);
+        assert_eq!(entries[0].direction, None);
+        assert_eq!(entries[0].label, "notes.md", "label 为显示名快照（name 空回退 gist 文件名）");
+    }
+
+    #[tokio::test]
+    async fn auto_noop_not_recorded() {
+        let f = fixture("a\n", "a\n", Some("a\n"));
+        f.engine.run_one("m1", Trigger::Poll).await;
+        assert!(f.synclog.tail(None).is_empty(), "自动空转不落库");
+    }
+
+    #[tokio::test]
+    async fn auto_upload_records_changed_stat() {
+        let f = fixture("a\nb\n", "a\n", Some("a\n"));
+        f.engine.run_one("m1", Trigger::Poll).await;
+        let entries = f.synclog.tail(None);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].direction, Some(LogDirection::Upload));
+        assert_eq!(entries[0].outcome, LogOutcome::Changed { added: Some(1), removed: Some(0) });
+    }
+
+    #[tokio::test]
+    async fn conflict_and_error_recorded() {
+        // 本地与远端同时偏离快照 → 冲突（自动触发也记录）
+        let f = fixture("local v2\n", "remote v2\n", Some("base\n"));
+        f.engine.run_one("m1", Trigger::Poll).await;
+        let entries = f.synclog.tail(None);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].outcome, LogOutcome::Conflict);
+
+        // 上传网络故障 → Error，code 提取自引擎状态消息
+        let f2 = fixture("new\n", "old\n", Some("old\n"));
+        *f2.fake.fail_update.lock().unwrap() = true;
+        f2.engine.run_one("m1", Trigger::ManualUpload).await;
+        let entries2 = f2.synclog.tail(None);
+        assert_eq!(entries2.len(), 1);
+        match &entries2[0].outcome {
+            LogOutcome::Error { code } => assert_eq!(code, "upload.failed"),
+            other => panic!("期望 Error，实际 {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn entries_newest_first_across_runs() {
+        let f = fixture("b\n", "a\n", Some("a\n"));
+        f.engine.run_one("m1", Trigger::Poll).await; // 上传（有变化）
+        f.engine.run_one("m1", Trigger::ManualUpload).await; // 再手动 → 无变化
+        let entries = f.synclog.tail(None);
+        assert_eq!(entries.len(), 2, "两次各落一条");
+        assert_eq!(entries[0].outcome, LogOutcome::NoChange, "新在前");
+        assert!(matches!(entries[1].outcome, LogOutcome::Changed { .. }));
     }
 
     #[tokio::test]
