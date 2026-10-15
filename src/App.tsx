@@ -6,11 +6,13 @@ import {
   AppstoreOutlined,
   CloudSyncOutlined,
   HistoryOutlined,
+  InfoCircleOutlined,
   SettingOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import Accounts from "./pages/Accounts";
+import About from "./pages/About";
 import { useStartupAutoCheck } from "./hooks/useUpdater";
 import Dashboard from "./pages/Dashboard";
 import History from "./pages/History";
@@ -25,6 +27,7 @@ const menuItems = [
   { key: "/history", icon: <HistoryOutlined />, ns: "menu.history" },
   { key: "/accounts", icon: <UserOutlined />, ns: "menu.accounts" },
   { key: "/settings", icon: <SettingOutlined />, ns: "menu.settings" },
+  { key: "/about", icon: <InfoCircleOutlined />, ns: "menu.about" },
 ];
 
 function AppLayout() {
@@ -74,6 +77,7 @@ function AppLayout() {
             <Route path="/history" element={<History />} />
             <Route path="/accounts" element={<Accounts />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/about" element={<About />} />
           </Routes>
         </Content>
       </Layout>
