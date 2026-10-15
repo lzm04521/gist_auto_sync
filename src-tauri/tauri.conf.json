@@ -14,7 +14,8 @@
       {
         "title": "Gist Auto Sync",
         "width": 960,
-        "height": 680
+        "height": 680,
+        "visible": false
       }
     ],
     "security": {
