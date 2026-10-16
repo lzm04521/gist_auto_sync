@@ -1,6 +1,5 @@
 //! 事件脚本执行器：静默执行 ps1/bat 脚本（CREATE_NO_WINDOW + 超时 + 环境变量注入 + 内联物化）。
 
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -166,7 +165,7 @@ async fn run_script(script: &Path, event: HookEvent, ctx: &HookContext, timeout:
         cmd.current_dir(dir);
     }
 
-    let mut child = match cmd.spawn() {
+    let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
             return HookOutcome {
