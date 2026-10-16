@@ -77,6 +77,7 @@ async fn setup() -> (SyncCtx, Mapping, tempfile::TempDir) {
         upload_enabled: true,
         download_enabled: true,
         enabled: true,
+        hooks: Default::default(),
     };
     (ctx, mapping, dir)
 }

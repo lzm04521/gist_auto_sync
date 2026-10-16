@@ -339,6 +339,7 @@ pub fn mapping_create(state: State<'_, AppState>, input: MappingInput) -> Result
         upload_enabled: input.upload_enabled,
         download_enabled: input.download_enabled,
         enabled: input.enabled,
+        hooks: Default::default(),
     };
     // 唯一性校验放进 update 闭包内，消除"校验后-写入前"的并发窗口（TOCTOU）
     let dup_key = (
