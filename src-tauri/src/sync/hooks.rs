@@ -107,7 +107,9 @@ pub(crate) async fn run_hook(hook: &EventHook, event: HookEvent, ctx: &HookConte
     }
 }
 
-/// 内联脚本物化到系统临时目录（每次执行重写，保证与配置当前值一致）
+/// 内联脚本物化到系统临时目录（每次执行重写，保证与配置当前值一致）。
+/// ps1 恒写 UTF-8 带 BOM（PS 5.1 无 BOM 按系统代码页解析，中文会乱码）；
+/// 换行统一 LF→CRLF（先拆 \r\n 再拼，幂等不产生 \r\r\n；cmd 批处理 LF-only 有边缘坑）。
 fn materialize_inline(hook: &EventHook, event: HookEvent) -> std::io::Result<PathBuf> {
     let ext = match hook.inline_kind {
         InlineKind::PowerShell => "ps1",
@@ -115,7 +117,13 @@ fn materialize_inline(hook: &EventHook, event: HookEvent) -> std::io::Result<Pat
     };
     let name = format!("gistsync-{}-{}.{}", event.as_str(), uuid::Uuid::new_v4().simple(), ext);
     let path = std::env::temp_dir().join(name);
-    std::fs::write(&path, hook.script_content.as_bytes())?;
+    let normalized = hook.script_content.replace("\r\n", "\n").replace('\n', "\r\n");
+    let mut bytes: Vec<u8> = Vec::with_capacity(normalized.len() + 3);
+    if matches!(hook.inline_kind, InlineKind::PowerShell) {
+        bytes.extend_from_slice(b"\xEF\xBB\xBF");
+    }
+    bytes.extend_from_slice(normalized.as_bytes());
+    std::fs::write(&path, bytes)?;
     Ok(path)
 }
 
@@ -353,5 +361,97 @@ mod tests {
             fs::canonicalize(dir.path()).unwrap(),
             fs::canonicalize(Path::new(marker.trim())).unwrap()
         );
+    }
+
+    // ── Inline 物化（Task 3）────────────────────────────────────────
+
+    fn inline_hook(kind: crate::model::InlineKind, content: &str) -> crate::model::EventHook {
+        crate::model::EventHook {
+            mode: crate::model::HookMode::Inline,
+            script_content: content.into(),
+            inline_kind: kind,
+            ..crate::model::EventHook::default()
+        }
+    }
+
+    /// 断言 temp 下指定事件前缀的内联临时文件数量
+    fn temp_count(event: &str) -> usize {
+        fs::read_dir(std::env::temp_dir())
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| {
+                        e.file_name().to_string_lossy().starts_with(&format!("gistsync-{event}-"))
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    #[tokio::test]
+    async fn inline_ps1_chinese_roundtrip() {
+        // 输出用显式 UTF-8 WriteAllText，隔离系统区域对 Set-Content 默认编码的影响；
+        // 本测试真正验证的是：含中文的 ps1 临时文件被 PowerShell 按 UTF-8（BOM）正确解析
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("a.md");
+        fs::write(&local, "x").unwrap();
+        let hook = inline_hook(
+            crate::model::InlineKind::PowerShell,
+            "$enc = New-Object System.Text.UTF8Encoding($false)\n[System.IO.File]::WriteAllText(($env:GISTSYNC_LOCAL_PATH + '.zh'), '中文内容测试', $enc)",
+        );
+        let out = run_hook(&hook, HookEvent::PostUpload, &ctx(&local)).await;
+        assert!(out.ok, "detail: {}", out.detail);
+        let written = fs::read_to_string(dir.path().join("a.md.zh")).unwrap();
+        assert_eq!(written, "中文内容测试");
+    }
+
+    #[test]
+    fn inline_crlf_content_stays_crlf_not_crcr() {
+        let body = |bytes: &[u8]| -> Vec<u8> {
+            // 剥掉 ps1 的 UTF-8 BOM 后比较
+            if bytes.starts_with(b"\xEF\xBB\xBF") {
+                bytes[3..].to_vec()
+            } else {
+                bytes.to_vec()
+            }
+        };
+        // LF 输入 → 写盘归一为 CRLF（cmd 批处理 LF-only 有 goto/标签边缘坑）
+        let lf = inline_hook(crate::model::InlineKind::PowerShell, "a\nb\nc\n");
+        let path = materialize_inline(&lf, HookEvent::PreUpload).unwrap();
+        let bytes = body(&fs::read(&path).unwrap());
+        fs::remove_file(&path).unwrap();
+        assert_eq!(bytes, b"a\r\nb\r\nc\r\n", "LF 应归一为 CRLF");
+        // 已含 CRLF 的输入不得变成 CRCR（归一必须幂等）
+        let crlf = inline_hook(crate::model::InlineKind::PowerShell, "a\r\nb\r\nc\r\n");
+        let path = materialize_inline(&crlf, HookEvent::PostUpload).unwrap();
+        let bytes = body(&fs::read(&path).unwrap());
+        fs::remove_file(&path).unwrap();
+        assert_eq!(bytes, b"a\r\nb\r\nc\r\n", "CRLF 不得归一成 CRCR");
+    }
+
+    #[tokio::test]
+    async fn inline_temp_file_cleaned_after_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("a.md");
+        fs::write(&local, "x").unwrap();
+        // 成功路径
+        let ok_hook = inline_hook(crate::model::InlineKind::PowerShell, "exit 0");
+        let out = run_hook(&ok_hook, HookEvent::PreUpload, &ctx(&local)).await;
+        assert!(out.ok, "detail: {}", out.detail);
+        assert_eq!(temp_count("preUpload"), 0, "成功执行后临时文件应被清理");
+        // 失败路径
+        let fail_hook = inline_hook(crate::model::InlineKind::PowerShell, "exit 1");
+        let out = run_hook(&fail_hook, HookEvent::PreDownload, &ctx(&local)).await;
+        assert!(!out.ok);
+        assert_eq!(temp_count("preDownload"), 0, "失败执行后临时文件也应被清理");
+    }
+
+    #[tokio::test]
+    async fn inline_bat_smoke() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("a.md");
+        fs::write(&local, "x").unwrap();
+        let hook = inline_hook(crate::model::InlineKind::Bat, "@echo off\nexit /b 0");
+        let out = run_hook(&hook, HookEvent::PostDownload, &ctx(&local)).await;
+        assert!(out.ok, "detail: {}", out.detail);
     }
 }
