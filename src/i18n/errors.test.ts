@@ -42,6 +42,14 @@ describe("ipcErrorMessage", () => {
       );
     }
   });
+
+  it("V0.6 钩子相关错误码均有双语文案", () => {
+    for (const lng of ["zh-CN", "en"]) {
+      for (const code of ["HOOK_SCRIPT_MISSING", "HOOK_SCRIPT_INVALID", "HOOK_SCRIPT_TOO_LARGE"]) {
+        expect(i18n.t(`errors.${code}`, { lng })).not.toBe(`errors.${code}`);
+      }
+    }
+  });
 });
 
 describe("statusMessageText", () => {
@@ -67,5 +75,13 @@ describe("statusMessageText", () => {
 
   it("空消息返回 undefined（Tooltip 不显示）", () => {
     expect(statusMessageText(null, t)).toBeUndefined();
+  });
+
+  it("V0.6 钩子状态码均有双语文案", () => {
+    for (const lng of ["zh-CN", "en"]) {
+      for (const code of ["hook.pre_upload_failed", "hook.pre_download_failed"]) {
+        expect(i18n.t(`statusMsg.${code}`, { lng })).not.toBe(`statusMsg.${code}`);
+      }
+    }
   });
 });

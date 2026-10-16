@@ -191,7 +191,10 @@
     "HISTORY_FILE_INVALID": "非法的归档文件名",
     "HISTORY_FILE_NOT_FOUND": "归档文件不存在",
     "HISTORY_READ_FAILED": "读取归档失败：{{detail}}",
-    "MAPPING_NAME_TOO_LONG": "映射名称长度不能超过 100 字符"
+    "MAPPING_NAME_TOO_LONG": "映射名称长度不能超过 100 字符",
+    "HOOK_SCRIPT_MISSING": "事件脚本文件不存在",
+    "HOOK_SCRIPT_INVALID": "事件脚本仅支持 .ps1 / .bat / .cmd",
+    "HOOK_SCRIPT_TOO_LARGE": "界面内脚本内容超过 64KB 限制"
   },
   "statusMsg": {
     "local": {
@@ -200,6 +203,10 @@
     },
     "remote": {
       "missing": "远端 gist 中不存在该文件"
+    },
+    "hook": {
+      "pre_upload_failed": "上传前事件脚本失败，已阻止本次上传：{{detail}}",
+      "pre_download_failed": "下载前事件脚本失败，已阻止本次下载：{{detail}}"
     },
     "account": {
       "not_found": "账号不存在"
