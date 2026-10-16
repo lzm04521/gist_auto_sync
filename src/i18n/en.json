@@ -93,7 +93,29 @@
     "edit": "Edit mapping",
     "loadingGists": "Loading gists…",
     "uploadEnabled": "Upload",
-    "downloadEnabled": "Download"
+    "downloadEnabled": "Download",
+    "hooks": {
+      "collapseTitle": "Event scripts",
+      "preUpload": "Before upload",
+      "postUpload": "After upload",
+      "preDownload": "Before download",
+      "postDownload": "After download",
+      "mode": "Script source",
+      "modeFile": "Script file",
+      "modeInline": "Inline script",
+      "scriptPath": "Script path",
+      "browse": "Browse",
+      "scriptFilterName": "Script files",
+      "inlineKind": "Format",
+      "powershell": "PowerShell",
+      "bat": "Batch",
+      "scriptContent": "Script content",
+      "inlineBatHint": "Inline .bat with Chinese text requires chcp 65001 on the first line",
+      "onlyWhenChanged": "Run only when file changed",
+      "onlyChangedHint": "Applies to manual syncs with no content change",
+      "blockOnFailure": "Block this sync on failure",
+      "blockOnFailureHint": "Only effective for before-upload / before-download events"
+    }
   },
   "dashboard": {
     "uploadNow": "Upload now",
@@ -169,7 +191,10 @@
     "HISTORY_FILE_INVALID": "Invalid archive file name",
     "HISTORY_FILE_NOT_FOUND": "Archive file not found",
     "HISTORY_READ_FAILED": "Failed to read archive: {{detail}}",
-    "MAPPING_NAME_TOO_LONG": "Mapping name must be at most 100 characters"
+    "MAPPING_NAME_TOO_LONG": "Mapping name must be at most 100 characters",
+    "HOOK_SCRIPT_MISSING": "Event script file does not exist",
+    "HOOK_SCRIPT_INVALID": "Event scripts must be .ps1 / .bat / .cmd",
+    "HOOK_SCRIPT_TOO_LARGE": "Inline script content exceeds the 64KB limit"
   },
   "statusMsg": {
     "local": {
@@ -178,6 +203,10 @@
     },
     "remote": {
       "missing": "This file no longer exists in the remote gist"
+    },
+    "hook": {
+      "pre_upload_failed": "Before-upload event script failed, upload blocked: {{detail}}",
+      "pre_download_failed": "Before-download event script failed, download blocked: {{detail}}"
     },
     "account": {
       "not_found": "Account not found"

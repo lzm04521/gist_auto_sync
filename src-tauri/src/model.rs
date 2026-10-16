@@ -36,6 +36,9 @@ pub struct Mapping {
     pub upload_enabled: bool,
     pub download_enabled: bool,
     pub enabled: bool,
+    /// 事件脚本钩子（V0.6 新增，旧配置缺键为全空）
+    #[serde(default)]
+    pub hooks: MappingHooks,
 }
 
 impl Mapping {
@@ -53,6 +56,89 @@ impl Mapping {
                 .unwrap_or(&self.local_path)
         }
     }
+}
+
+/// 事件脚本来源模式：引用磁盘脚本文件 / 界面内联维护脚本内容
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookMode {
+    #[default]
+    File,
+    Inline,
+}
+
+/// 内联脚本的类型（决定临时文件扩展名与执行器）
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InlineKind {
+    #[default]
+    PowerShell,
+    Bat,
+}
+
+/// 单个事件钩子配置（上传前/上传后/下载前/下载后各一份）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventHook {
+    #[serde(default)]
+    pub mode: HookMode,
+    /// File 模式：脚本文件绝对路径（空 = 该钩子未配置）
+    #[serde(default)]
+    pub script_path: String,
+    /// Inline 模式：界面维护的脚本内容（空 = 该钩子未配置）
+    #[serde(default)]
+    pub script_content: String,
+    /// Inline 模式：脚本类型
+    #[serde(default)]
+    pub inline_kind: InlineKind,
+    /// 仅文件有变动时执行（作用于手动同步内容无变化的场景）
+    #[serde(default = "default_true")]
+    pub only_when_changed: bool,
+    /// 失败时阻止本次同步（仅前置钩子有意义）
+    #[serde(default = "default_true")]
+    pub block_on_failure: bool,
+}
+
+/// 与 serde 缺省对齐：旧配置整块缺 hooks 键时走 Default 路径，两个开关必须同样默认开
+impl Default for EventHook {
+    fn default() -> Self {
+        Self {
+            mode: HookMode::File,
+            script_path: String::new(),
+            script_content: String::new(),
+            inline_kind: InlineKind::PowerShell,
+            only_when_changed: true,
+            block_on_failure: true,
+        }
+    }
+}
+
+impl EventHook {
+    /// 是否已配置：File 模式看路径非空，Inline 模式看内容非空
+    pub fn is_configured(&self) -> bool {
+        match self.mode {
+            HookMode::File => !self.script_path.is_empty(),
+            HookMode::Inline => !self.script_content.is_empty(),
+        }
+    }
+}
+
+/// 一条映射的四个事件钩子
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MappingHooks {
+    #[serde(default)]
+    pub pre_upload: EventHook,
+    #[serde(default)]
+    pub post_upload: EventHook,
+    #[serde(default)]
+    pub pre_download: EventHook,
+    #[serde(default)]
+    pub post_download: EventHook,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -174,6 +260,7 @@ mod tests {
             upload_enabled: true,
             download_enabled: true,
             enabled: true,
+            hooks: MappingHooks::default(),
         };
         assert_eq!(full.display_name(), "工作笔记");
         let no_name = Mapping {
@@ -191,5 +278,60 @@ mod tests {
             ..no_filename
         };
         assert_eq!(nothing.display_name(), "", "终极兜底为本地路径本身");
+    }
+
+    #[test]
+    fn legacy_mapping_without_hooks_deserializes_to_default() {
+        let m: Mapping = serde_json::from_str(
+            r#"{
+            "id": "map-1", "name": "", "localPath": "C:/a.md", "accountId": "acc-1",
+            "gistId": "g", "gistFilename": "a.md",
+            "uploadEnabled": true, "downloadEnabled": true, "enabled": true
+        }"#,
+        )
+        .unwrap();
+        assert!(!m.hooks.pre_upload.is_configured());
+        assert!(m.hooks.post_download.only_when_changed, "缺省默认 true");
+        assert!(m.hooks.pre_download.block_on_failure, "缺省默认 true");
+        assert_eq!(m.hooks.pre_upload.mode, HookMode::File);
+    }
+
+    #[test]
+    fn event_hook_serializes_camel_case_and_roundtrips() {
+        let hook = EventHook {
+            mode: HookMode::Inline,
+            script_content: "Write-Output ok".into(),
+            inline_kind: InlineKind::PowerShell,
+            ..EventHook::default()
+        };
+        let v = serde_json::to_value(&hook).unwrap();
+        assert_eq!(v["mode"], "inline");
+        assert_eq!(v["inlineKind"], "powershell");
+        assert_eq!(v["scriptContent"], "Write-Output ok");
+        let back: EventHook = serde_json::from_value(v).unwrap();
+        assert_eq!(back, hook);
+    }
+
+    #[test]
+    fn is_configured_depends_on_mode() {
+        let mut h = EventHook::default();
+        assert!(!h.is_configured());
+        h.script_path = "C:/x.ps1".into();
+        assert!(h.is_configured(), "File 模式看路径");
+        h.mode = HookMode::Inline;
+        assert!(!h.is_configured(), "Inline 模式路径非空不算已配置");
+        h.script_content = "exit 0".into();
+        assert!(h.is_configured());
+    }
+
+    #[test]
+    fn event_hook_mode_missing_deserializes_to_file() {
+        // 手改配置删掉 mode 键不得令整份配置加载失败（其余字段均有 serde 缺省）
+        let h: EventHook = serde_json::from_str(
+            r#"{"scriptPath": "C:/x.ps1"}"#,
+        )
+        .unwrap();
+        assert_eq!(h.mode, HookMode::File);
+        assert!(h.only_when_changed && h.block_on_failure);
     }
 }

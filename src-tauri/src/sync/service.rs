@@ -860,6 +860,7 @@ mod tests {
                     upload_enabled: true,
                     download_enabled: true,
                     enabled: true,
+                    hooks: Default::default(),
                 });
             })
             .unwrap();

@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { App as AntApp, Button, Form, Input, Modal, Radio, Select, Switch } from "antd";
+import { App as AntApp, Button, Collapse, Form, Input, Modal, Radio, Select, Switch } from "antd";
 import { FolderOpenOutlined } from "@ant-design/icons";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { accountList, gistListForAccount, mappingCreate, mappingUpdate } from "../api/ipc";
 import { ipcErrorMessage } from "../i18n/errors";
-import type { Account, GistSummary, Mapping } from "../types";
+import type { Account, EventHook, GistSummary, Mapping, MappingHooks } from "../types";
+import EventHookSection, { emptyEventHook, type HookField } from "./EventHookSection";
 
 export interface FormValues {
   name?: string;
@@ -16,7 +17,45 @@ export interface FormValues {
   gistFilename: string;
   uploadEnabled: boolean;
   downloadEnabled: boolean;
+  /** 事件脚本区（未触碰的字段为 undefined，提交时归一） */
+  hooks?: Partial<Record<HookField, Partial<EventHook>>>;
 }
+
+const HOOK_FIELDS: { field: HookField; isPre: boolean }[] = [
+  { field: "preUpload", isPre: true },
+  { field: "postUpload", isPre: false },
+  { field: "preDownload", isPre: true },
+  { field: "postDownload", isPre: false },
+];
+
+/** 单钩子归一：以缺省形状兜底（antd 表单 store 会给已注册未触碰的字段留 undefined 键，逐字段回退） */
+const normalizeHook = (partial?: Partial<EventHook>): EventHook => {
+  const base = emptyEventHook();
+  if (!partial) return base;
+  return {
+    mode: partial.mode ?? base.mode,
+    scriptPath: partial.scriptPath ?? base.scriptPath,
+    scriptContent: partial.scriptContent ?? base.scriptContent,
+    inlineKind: partial.inlineKind ?? base.inlineKind,
+    onlyWhenChanged: partial.onlyWhenChanged ?? base.onlyWhenChanged,
+    blockOnFailure: partial.blockOnFailure ?? base.blockOnFailure,
+  };
+};
+
+/** 提交前把表单里残缺的钩子字段归一为完整形状（缺省即后端 serde 缺省） */
+const normalizeHooks = (raw: FormValues["hooks"]): MappingHooks => ({
+  preUpload: normalizeHook(raw?.preUpload),
+  postUpload: normalizeHook(raw?.postUpload),
+  preDownload: normalizeHook(raw?.preDownload),
+  postDownload: normalizeHook(raw?.postDownload),
+});
+
+/** 任一钩子已配置（决定编辑时事件区是否默认展开） */
+const anyHookConfigured = (m: Mapping): boolean =>
+  HOOK_FIELDS.some(({ field }) => {
+    const h = m.hooks?.[field];
+    return !!h && (h.mode === "file" ? h.scriptPath !== "" : h.scriptContent !== "");
+  });
 
 /** 取路径最后一段作为文件名（兼容 / 与 \） */
 export function fileNameOf(path: string): string {
@@ -101,6 +140,7 @@ export default function MappingForm({ open, editing, onCancel, onSaved }: Props)
         gistFilename: editing.gistFilename,
         uploadEnabled: editing.uploadEnabled,
         downloadEnabled: editing.downloadEnabled,
+        hooks: editing.hooks,
       });
     } else {
       form.resetFields();
@@ -149,6 +189,7 @@ export default function MappingForm({ open, editing, onCancel, onSaved }: Props)
         uploadEnabled: values.uploadEnabled,
         downloadEnabled: values.downloadEnabled,
         enabled: editing ? editing.enabled : true,
+        hooks: normalizeHooks(values.hooks),
       };
       if (editing) {
         await mappingUpdate(editing.id, payload);
@@ -252,6 +293,23 @@ export default function MappingForm({ open, editing, onCancel, onSaved }: Props)
             <Switch checkedChildren={t("mappings.downloadEnabled")} unCheckedChildren={t("mappings.downloadEnabled")} />
           </Form.Item>
         </Form.Item>
+        <Collapse
+          ghost
+          items={[
+            {
+              key: "hooks",
+              label: t("mappings.hooks.collapseTitle"),
+              children: (
+                <>
+                  {HOOK_FIELDS.map(({ field, isPre }) => (
+                    <EventHookSection key={field} field={field} isPre={isPre} />
+                  ))}
+                </>
+              ),
+            },
+          ]}
+          defaultActiveKey={editing && anyHookConfigured(editing) ? ["hooks"] : []}
+        />
       </Form>
     </Modal>
   );

@@ -70,6 +70,9 @@ pub struct MappingInput {
     pub download_enabled: bool,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// 事件脚本钩子（V0.6；旧前端缺键为全空）
+    #[serde(default)]
+    pub hooks: crate::model::MappingHooks,
 }
 
 fn default_true() -> bool {
@@ -323,7 +326,43 @@ fn validate_mapping(
             return Err(ipc_err("MAPPING_TRIPLE_DUPLICATE", "该账号下相同 gist 的相同文件已有映射"));
         }
     }
+    validate_hooks(&input.hooks)?;
     Ok((normalize_stored_path(&input.local_path), gist_filename))
+}
+
+/// 事件脚本配置校验（V0.6）：File 模式看文件存在 + 扩展名白名单；Inline 模式看内容大小。
+/// 未配置的钩子（对应字段为空）不校验。
+fn validate_hooks(hooks: &crate::model::MappingHooks) -> Result<(), String> {
+    use crate::model::HookMode;
+    for hook in [&hooks.pre_upload, &hooks.post_upload, &hooks.pre_download, &hooks.post_download] {
+        match hook.mode {
+            HookMode::File if !hook.script_path.is_empty() => {
+                let p = Path::new(&hook.script_path);
+                if !p.is_file() {
+                    return Err(ipc_err(
+                        "HOOK_SCRIPT_MISSING",
+                        format!("事件脚本文件不存在: {}", hook.script_path),
+                    ));
+                }
+                let ext_ok = p
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| matches!(e.to_ascii_lowercase().as_str(), "ps1" | "bat" | "cmd"))
+                    .unwrap_or(false);
+                if !ext_ok {
+                    return Err(ipc_err("HOOK_SCRIPT_INVALID", "事件脚本仅支持 .ps1 / .bat / .cmd"));
+                }
+            }
+            HookMode::Inline
+                if !hook.script_content.is_empty()
+                    && hook.script_content.chars().count() > 65536 =>
+            {
+                return Err(ipc_err("HOOK_SCRIPT_TOO_LARGE", "界面内脚本内容超过 64KB 限制"));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -339,6 +378,7 @@ pub fn mapping_create(state: State<'_, AppState>, input: MappingInput) -> Result
         upload_enabled: input.upload_enabled,
         download_enabled: input.download_enabled,
         enabled: input.enabled,
+        hooks: input.hooks,
     };
     // 唯一性校验放进 update 闭包内，消除"校验后-写入前"的并发窗口（TOCTOU）
     let dup_key = (
@@ -408,6 +448,7 @@ pub fn mapping_update(
             m.upload_enabled = input.upload_enabled;
             m.download_enabled = input.download_enabled;
             m.enabled = input.enabled;
+            m.hooks = input.hooks.clone();
             Ok(())
         })
         .map_err(|e| ipc_err("CONFIG_SAVE_FAILED", e.to_string()))?;
@@ -846,5 +887,68 @@ mod tests {
         }
         assert!(ensure_archive_name("20260101000000000-local.md").is_ok());
         assert!(ensure_archive_name("20260101000000000-remote.txt").is_ok());
+    }
+
+    // ── 事件脚本校验（V0.6）────────────────────────────────────────
+
+    fn hook_with_path(path: &str) -> crate::model::EventHook {
+        crate::model::EventHook {
+            script_path: path.into(),
+            ..crate::model::EventHook::default()
+        }
+    }
+
+    #[test]
+    fn file_hook_validation_matrix() {
+        let dir = tempfile::tempdir().unwrap();
+        let ps1 = dir.path().join("a.ps1");
+        std::fs::write(&ps1, "exit 0").unwrap();
+        let ps1_upper = dir.path().join("B.PS1");
+        std::fs::write(&ps1_upper, "exit 0").unwrap();
+        let exe = dir.path().join("c.exe");
+        std::fs::write(&exe, "x").unwrap();
+
+        let mut hooks = crate::model::MappingHooks::default();
+        assert!(validate_hooks(&hooks).is_ok(), "全空 hooks 应通过");
+
+        hooks.pre_upload = hook_with_path(&ps1.to_string_lossy());
+        assert!(validate_hooks(&hooks).is_ok(), "存在的 ps1 应通过");
+
+        hooks.post_download = hook_with_path(&ps1_upper.to_string_lossy());
+        assert!(validate_hooks(&hooks).is_ok(), "大写 .PS1 应通过（扩展名不区分大小写）");
+
+        hooks.post_upload = hook_with_path(&dir.path().join("not-exist.ps1").to_string_lossy());
+        let err = validate_hooks(&hooks).unwrap_err();
+        assert!(err.contains("HOOK_SCRIPT_MISSING"), "err={err}");
+
+        hooks.post_upload = hook_with_path(&exe.to_string_lossy());
+        let err = validate_hooks(&hooks).unwrap_err();
+        assert!(err.contains("HOOK_SCRIPT_INVALID"), "err={err}");
+    }
+
+    #[test]
+    fn inline_size_boundary_65536_ok_65537_rejected() {
+        let mut hooks = crate::model::MappingHooks::default();
+        hooks.pre_download = crate::model::EventHook {
+            mode: crate::model::HookMode::Inline,
+            script_content: "a".repeat(65536),
+            ..crate::model::EventHook::default()
+        };
+        assert!(validate_hooks(&hooks).is_ok(), "恰好 65536 字符应通过");
+        hooks.pre_download.script_content = "a".repeat(65537);
+        let err = validate_hooks(&hooks).unwrap_err();
+        assert!(err.contains("HOOK_SCRIPT_TOO_LARGE"), "err={err}");
+    }
+
+    #[test]
+    fn mapping_input_legacy_without_hooks_deserializes() {
+        let input: MappingInput = serde_json::from_str(
+            r#"{
+            "name": "", "localPath": "C:/a.md", "accountId": "a", "gistId": "g",
+            "gistFilename": "a.md", "uploadEnabled": true, "downloadEnabled": true, "enabled": true
+        }"#,
+        )
+        .unwrap();
+        assert!(!input.hooks.pre_upload.is_configured());
     }
 }
