@@ -80,6 +80,7 @@ pub enum InlineKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventHook {
+    #[serde(default)]
     pub mode: HookMode,
     /// File 模式：脚本文件绝对路径（空 = 该钩子未配置）
     #[serde(default)]
@@ -321,5 +322,16 @@ mod tests {
         assert!(!h.is_configured(), "Inline 模式路径非空不算已配置");
         h.script_content = "exit 0".into();
         assert!(h.is_configured());
+    }
+
+    #[test]
+    fn event_hook_mode_missing_deserializes_to_file() {
+        // 手改配置删掉 mode 键不得令整份配置加载失败（其余字段均有 serde 缺省）
+        let h: EventHook = serde_json::from_str(
+            r#"{"scriptPath": "C:/x.ps1"}"#,
+        )
+        .unwrap();
+        assert_eq!(h.mode, HookMode::File);
+        assert!(h.only_when_changed && h.block_on_failure);
     }
 }
