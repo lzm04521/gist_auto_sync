@@ -12,6 +12,7 @@ use crate::provider::{build_provider, GistProvider, ProviderError};
 use crate::secrets;
 use crate::sync::compare::{decide, normalize, sha256_hex, CompareInput, Decision};
 use crate::sync::history::HistoryReason;
+use crate::sync::hooks::{run_hook, HookContext, HookEvent, HookTrigger};
 use crate::sync::snapshot::{SelfWriteGuard, Side, SnapshotState, SnapshotStore};
 
 /// 触发源
@@ -416,6 +417,29 @@ pub async fn run_sync_cycle_with_hint(
                 );
             }
             emit_status(ctx, mapping, MappingStatus::Uploading, None, false);
+            // ── 前置事件钩子（V0.6）：失败可阻止本次上传；成功后重读本地（脚本可能加工过内容）
+            let upload_local: Option<String> = if mapping.hooks.pre_upload.is_configured() {
+                if let Some(blocked) =
+                    run_pre_hook(ctx, mapping, trigger, HookEvent::PreUpload, &mapping.hooks.pre_upload).await
+                {
+                    return blocked;
+                }
+                match std::fs::read_to_string(&mapping.local_path) {
+                    Ok(text) => Some(text),
+                    Err(e) => {
+                        return emit_outcome(
+                            ctx,
+                            mapping,
+                            MappingStatus::Error,
+                            status_msg("local.read_failed", format!("读取本地文件失败: {e}")),
+                            false,
+                            None,
+                        );
+                    }
+                }
+            } else {
+                local_raw
+            };
             // 归档旧远端（远端文件不存在时无可归档）
             if let Some(remote) = &remote_raw {
                 let _ = ctx.snapshots.archive(
@@ -427,7 +451,7 @@ pub async fn run_sync_cycle_with_hint(
                 );
             }
             // 上传规范化内容（CRLF→LF），快照以回读为准
-            let content = normalize(local_raw.as_deref().expect("Upload 分支必有本地内容"));
+            let content = normalize(upload_local.as_deref().expect("Upload 分支必有本地内容"));
             // 变化统计：远端上一版（远端无该文件视为空）→ 本次上传内容
             let stat = write_stat(crate::synclog::LogDirection::Upload, remote_raw.as_deref().unwrap_or(""), &content);
             tracing::info!("[{}] 上传 {} → gist {}（{} 字节）", mapping.id, mapping.gist_filename, mapping.gist_id, content.len());
@@ -526,6 +550,12 @@ pub async fn run_sync_cycle_with_hint(
                 );
             }
             emit_status(ctx, mapping, MappingStatus::Downloading, None, false);
+            // ── 前置事件钩子（V0.6）：失败可阻止本次下载写盘
+            if let Some(blocked) =
+                run_pre_hook(ctx, mapping, trigger, HookEvent::PreDownload, &mapping.hooks.pre_download).await
+            {
+                return blocked;
+            }
             // 归档旧本地
             if let Some(local) = &local_raw {
                 let _ = ctx.snapshots.archive(
@@ -587,6 +617,54 @@ fn rate_limit_hint(e: &ProviderError) -> Option<Duration> {
         ProviderError::RateLimited { retry_after } => *retry_after,
         _ => None,
     }
+}
+
+/// 组装钩子执行上下文（注入环境变量与工作目录的来源）
+fn hook_context_for(mapping: &Mapping, trigger: Trigger) -> HookContext {
+    HookContext {
+        local_path: mapping.local_path.clone(),
+        mapping_name: mapping.display_name().to_string(),
+        trigger: match trigger {
+            Trigger::LocalSettled | Trigger::Poll => HookTrigger::Auto,
+            Trigger::ManualUpload | Trigger::ManualDownload => HookTrigger::Manual,
+        },
+    }
+}
+
+/// 前置事件钩子（V0.6）：未配置 → None；成功 → None；
+/// 失败且 block_on_failure=true → Some(Error 结果) 阻止本次同步；失败且不阻止 → None（仅记日志）。
+async fn run_pre_hook(
+    ctx: &SyncCtx,
+    mapping: &Mapping,
+    trigger: Trigger,
+    event: HookEvent,
+    hook: &crate::model::EventHook,
+) -> Option<CycleOutcome> {
+    if !hook.is_configured() {
+        return None;
+    }
+    let hook_ctx = hook_context_for(mapping, trigger);
+    let out = run_hook(hook, event, &hook_ctx).await;
+    if out.ok {
+        return None;
+    }
+    let code = match event {
+        HookEvent::PreUpload => "hook.pre_upload_failed",
+        HookEvent::PreDownload => "hook.pre_download_failed",
+        _ => return None,
+    };
+    if !hook.block_on_failure {
+        tracing::warn!("[{}] 前置钩子失败但不阻止同步: {}", mapping.id, out.detail);
+        return None;
+    }
+    Some(emit_outcome(
+        ctx,
+        mapping,
+        MappingStatus::Error,
+        status_msg(code, format!("事件脚本失败，已阻止本次同步: {}", out.detail)),
+        false,
+        None,
+    ))
 }
 
 pub(crate) fn ext_of(name: &str) -> String {
@@ -900,6 +978,83 @@ mod tests {
         let status = run_sync_cycle(&f.ctx, &f.mapping, Trigger::LocalSettled).await;
         assert_eq!(status, MappingStatus::Idle);
         assert_eq!(f.fake.calls(), calls, "自写抑制：不应产生任何 API 调用");
+    }
+
+    // ── 前置事件钩子（V0.6）──────────────────────────────────────────
+
+    fn file_hook(script: &Path, block: bool) -> crate::model::EventHook {
+        crate::model::EventHook {
+            script_path: script.to_string_lossy().to_string(),
+            block_on_failure: block,
+            ..crate::model::EventHook::default()
+        }
+    }
+
+    async fn remote_content(f: &Fixture) -> String {
+        f.fake
+            .get_gist("gist1", Some("notes.md"))
+            .await
+            .unwrap()
+            .files
+            .into_iter()
+            .find(|fl| fl.filename == "notes.md")
+            .and_then(|fl| fl.content)
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn pre_upload_failure_blocks_upload() {
+        let mut f = fixture("new local", "old remote", Some("old remote"));
+        let script = f.dir.path().join("pre-fail.ps1");
+        fs::write(&script, "exit 1").unwrap();
+        f.mapping.hooks.pre_upload = file_hook(&script, true);
+        let out = run_sync_cycle_with_hint(&f.ctx, &f.mapping, Trigger::LocalSettled).await;
+        assert_eq!(out.status, MappingStatus::Error);
+        assert!(
+            out.message.as_deref().unwrap_or("").contains("hook.pre_upload_failed"),
+            "message={:?}", out.message
+        );
+        assert_eq!(f.fake.update_calls(), 0, "阻止语义：不应发起上传");
+    }
+
+    #[tokio::test]
+    async fn pre_upload_failure_continues_when_block_disabled() {
+        let mut f = fixture("new local", "old remote", Some("old remote"));
+        let script = f.dir.path().join("pre-fail.ps1");
+        fs::write(&script, "exit 1").unwrap();
+        f.mapping.hooks.pre_upload = file_hook(&script, false);
+        let out = run_sync_cycle_with_hint(&f.ctx, &f.mapping, Trigger::LocalSettled).await;
+        assert_eq!(out.status, MappingStatus::Idle);
+        assert_eq!(f.fake.update_calls(), 1, "不阻止：照常上传");
+    }
+
+    #[tokio::test]
+    async fn pre_upload_success_rereads_modified_file() {
+        let mut f = fixture("new local", "old remote", Some("old remote"));
+        let script = f.dir.path().join("pre-format.ps1");
+        fs::write(&script, "Set-Content -Path $env:GISTSYNC_LOCAL_PATH -Value 'formatted'").unwrap();
+        f.mapping.hooks.pre_upload = file_hook(&script, true);
+        let out = run_sync_cycle_with_hint(&f.ctx, &f.mapping, Trigger::LocalSettled).await;
+        assert_eq!(out.status, MappingStatus::Idle);
+        // Set-Content 落盘 "formatted\r\n"，上传内容为归一化后的 "formatted\n"
+        assert_eq!(remote_content(&f).await, "formatted\n", "上传的应是脚本加工后的内容");
+        assert_eq!(f.ctx.snapshots.load("m1").unwrap().last_synced_hash, sha("formatted\n"));
+    }
+
+    #[tokio::test]
+    async fn pre_download_failure_blocks_download() {
+        let mut f = fixture("old local", "new remote", Some("old local"));
+        let script = f.dir.path().join("pre-dl-fail.ps1");
+        fs::write(&script, "exit 1").unwrap();
+        f.mapping.hooks.pre_download = file_hook(&script, true);
+        let out = run_sync_cycle_with_hint(&f.ctx, &f.mapping, Trigger::Poll).await;
+        assert_eq!(out.status, MappingStatus::Error);
+        assert!(
+            out.message.as_deref().unwrap_or("").contains("hook.pre_download_failed"),
+            "message={:?}", out.message
+        );
+        assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "old local", "本地文件不应被覆盖");
+        assert_eq!(f.fake.update_calls(), 0);
     }
 
     // ── 变化统计（V0.5）──────────────────────────────────────────────
