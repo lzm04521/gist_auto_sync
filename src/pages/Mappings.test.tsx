@@ -24,6 +24,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.dialogOpen }));
 
 import Mappings from "./Mappings";
 import { IpcError } from "../api/ipc";
+import { emptyEventHook } from "../components/EventHookSection";
 
 const account = {
   id: "acc1",
@@ -152,6 +153,13 @@ describe("Mappings page", () => {
       uploadEnabled: true,
       downloadEnabled: false,
       enabled: true,
+      // 事件区未打开 → 提交归一为四个默认（未配置）钩子
+      hooks: {
+        preUpload: emptyEventHook(),
+        postUpload: emptyEventHook(),
+        preDownload: emptyEventHook(),
+        postDownload: emptyEventHook(),
+      },
     });
   }, 40_000);
 
