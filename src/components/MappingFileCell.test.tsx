@@ -14,6 +14,12 @@ const mapping = (over: Partial<Mapping>): Mapping => ({
   uploadEnabled: true,
   downloadEnabled: true,
   enabled: true,
+  hooks: {
+    preUpload: { mode: "file", scriptPath: "", scriptContent: "", inlineKind: "powershell", onlyWhenChanged: true, blockOnFailure: true },
+    postUpload: { mode: "file", scriptPath: "", scriptContent: "", inlineKind: "powershell", onlyWhenChanged: true, blockOnFailure: true },
+    preDownload: { mode: "file", scriptPath: "", scriptContent: "", inlineKind: "powershell", onlyWhenChanged: true, blockOnFailure: true },
+    postDownload: { mode: "file", scriptPath: "", scriptContent: "", inlineKind: "powershell", onlyWhenChanged: true, blockOnFailure: true },
+  },
   ...over,
 });
 

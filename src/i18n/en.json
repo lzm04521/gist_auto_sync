@@ -93,7 +93,29 @@
     "edit": "Edit mapping",
     "loadingGists": "Loading gists…",
     "uploadEnabled": "Upload",
-    "downloadEnabled": "Download"
+    "downloadEnabled": "Download",
+    "hooks": {
+      "collapseTitle": "Event scripts",
+      "preUpload": "Before upload",
+      "postUpload": "After upload",
+      "preDownload": "Before download",
+      "postDownload": "After download",
+      "mode": "Script source",
+      "modeFile": "Script file",
+      "modeInline": "Inline script",
+      "scriptPath": "Script path",
+      "browse": "Browse",
+      "scriptFilterName": "Script files",
+      "inlineKind": "Format",
+      "powershell": "PowerShell",
+      "bat": "Batch",
+      "scriptContent": "Script content",
+      "inlineBatHint": "Inline .bat with Chinese text requires chcp 65001 on the first line",
+      "onlyWhenChanged": "Run only when file changed",
+      "onlyChangedHint": "Applies to manual syncs with no content change",
+      "blockOnFailure": "Block this sync on failure",
+      "blockOnFailureHint": "Only effective for before-upload / before-download events"
+    }
   },
   "dashboard": {
     "uploadNow": "Upload now",

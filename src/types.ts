@@ -20,6 +20,33 @@ export interface Mapping {
   uploadEnabled: boolean;
   downloadEnabled: boolean;
   enabled: boolean;
+  hooks: MappingHooks;
+}
+
+// ── 事件脚本钩子（V0.6）────────────────────────────────────────────
+
+export type HookMode = "file" | "inline";
+
+export type InlineKind = "powershell" | "bat";
+
+export interface EventHook {
+  mode: HookMode;
+  /** File 模式：脚本文件绝对路径（空 = 未配置） */
+  scriptPath: string;
+  /** Inline 模式：界面维护的脚本内容（空 = 未配置） */
+  scriptContent: string;
+  inlineKind: InlineKind;
+  /** 仅文件有变动时执行（作用于手动同步内容无变化的场景） */
+  onlyWhenChanged: boolean;
+  /** 失败时阻止本次同步（仅前置钩子有意义） */
+  blockOnFailure: boolean;
+}
+
+export interface MappingHooks {
+  preUpload: EventHook;
+  postUpload: EventHook;
+  preDownload: EventHook;
+  postDownload: EventHook;
 }
 
 export interface GlobalSettings {
@@ -83,6 +110,7 @@ export interface MappingInput {
   uploadEnabled: boolean;
   downloadEnabled: boolean;
   enabled: boolean;
+  hooks: MappingHooks;
 }
 
 // ── 历史（V0.3）────────────────────────────────────────────────────────

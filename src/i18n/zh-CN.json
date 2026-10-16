@@ -93,7 +93,29 @@
     "edit": "编辑映射",
     "loadingGists": "加载 gists…",
     "uploadEnabled": "上传",
-    "downloadEnabled": "下载"
+    "downloadEnabled": "下载",
+    "hooks": {
+      "collapseTitle": "事件脚本",
+      "preUpload": "上传前",
+      "postUpload": "上传后",
+      "preDownload": "下载前",
+      "postDownload": "下载后",
+      "mode": "脚本来源",
+      "modeFile": "脚本文件",
+      "modeInline": "内联脚本",
+      "scriptPath": "脚本路径",
+      "browse": "浏览",
+      "scriptFilterName": "脚本文件",
+      "inlineKind": "脚本格式",
+      "powershell": "PowerShell",
+      "bat": "批处理",
+      "scriptContent": "脚本内容",
+      "inlineBatHint": "内联 bat 使用中文需在首行自行加 chcp 65001",
+      "onlyWhenChanged": "仅文件有变动时执行",
+      "onlyChangedHint": "作用于手动同步但内容无变化的场景",
+      "blockOnFailure": "失败时阻止本次同步",
+      "blockOnFailureHint": "仅上传前/下载前事件有效"
+    }
   },
   "dashboard": {
     "uploadNow": "立即上传",
