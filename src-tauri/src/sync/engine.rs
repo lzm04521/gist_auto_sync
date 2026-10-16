@@ -296,6 +296,11 @@ pub async fn run_sync_cycle_with_hint(
             let _ = local;
             // 远端文件缺失（被改名/删除）时也放行：ManualUpload = 在远端重建（spec §6.3）
             if !local_changed && remote_file.is_some() {
+                // 手动无变化 + 后置钩子允许空跑（V0.6）：只执行后置钩子（前置无同步动作可拦）
+                let post = &mapping.hooks.post_upload;
+                if post.is_configured() && !post.only_when_changed {
+                    run_post_hook(mapping, trigger, HookEvent::PostUpload, post).await;
+                }
                 return emit_outcome(
                     ctx,
                     mapping,
@@ -325,6 +330,10 @@ pub async fn run_sync_cycle_with_hint(
             let _ = remote;
             // 本地文件缺失（被删除）时也放行：ManualDownload = 恢复本地（spec §6.3）
             if !remote_changed && local_raw.is_some() {
+                let post = &mapping.hooks.post_download;
+                if post.is_configured() && !post.only_when_changed {
+                    run_post_hook(mapping, trigger, HookEvent::PostDownload, post).await;
+                }
                 return emit_outcome(
                     ctx,
                     mapping,
@@ -523,6 +532,8 @@ pub async fn run_sync_cycle_with_hint(
                         );
                     }
                     tracing::info!("[{}] 上传完成", mapping.id);
+                    // 后置事件钩子（V0.6）：失败仅记日志
+                    run_post_hook(mapping, trigger, HookEvent::PostUpload, &mapping.hooks.post_upload).await;
                     emit_outcome_stat(ctx, mapping, MappingStatus::Idle, None, true, None, stat)
                 }
                 Err(e) => {
@@ -606,6 +617,8 @@ pub async fn run_sync_cycle_with_hint(
                 );
             }
             tracing::info!("[{}] 下载完成", mapping.id);
+            // 后置事件钩子（V0.6）：失败仅记日志；脚本若加工本地文件会触发下一轮自动上传（特性）
+            run_post_hook(mapping, trigger, HookEvent::PostDownload, &mapping.hooks.post_download).await;
             emit_outcome_stat(ctx, mapping, MappingStatus::Idle, None, true, None, stat)
         }
     }
@@ -665,6 +678,18 @@ async fn run_pre_hook(
         false,
         None,
     ))
+}
+
+/// 后置事件钩子（V0.6）：未配置跳过；失败仅记日志，不影响同步结果。
+async fn run_post_hook(mapping: &Mapping, trigger: Trigger, event: HookEvent, hook: &crate::model::EventHook) {
+    if !hook.is_configured() {
+        return;
+    }
+    let hook_ctx = hook_context_for(mapping, trigger);
+    let out = run_hook(hook, event, &hook_ctx).await;
+    if !out.ok {
+        tracing::warn!("[{}] 后置钩子失败（不影响同步结果）: {}", mapping.id, out.detail);
+    }
 }
 
 pub(crate) fn ext_of(name: &str) -> String {
@@ -1055,6 +1080,86 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "old local", "本地文件不应被覆盖");
         assert_eq!(f.fake.update_calls(), 0);
+    }
+
+    // ── 后置事件钩子与手动无变化路径（V0.6）────────────────────────
+
+    #[tokio::test]
+    async fn post_download_failure_does_not_affect_download() {
+        let mut f = fixture("old local", "new remote", Some("old local"));
+        let script = f.dir.path().join("post-dl-fail.ps1");
+        fs::write(&script, "exit 1").unwrap();
+        f.mapping.hooks.post_download = file_hook(&script, true);
+        let out = run_sync_cycle_with_hint(&f.ctx, &f.mapping, Trigger::Poll).await;
+        assert_eq!(out.status, MappingStatus::Idle, "后置失败只记日志");
+        assert_eq!(fs::read_to_string(&f.local_path).unwrap(), "new remote");
+        assert!(f.ctx.snapshots.load("m1").is_some(), "快照应已保存");
+    }
+
+    #[tokio::test]
+    async fn manual_upload_no_change_runs_only_post_hook() {
+        let mut f = fixture("same", "same", Some("same"));
+        let pre = f.dir.path().join("m-pre.ps1");
+        fs::write(&pre, "Set-Content -Path ($env:GISTSYNC_LOCAL_PATH + '.pre') -Value 'ran'").unwrap();
+        let post = f.dir.path().join("m-post.ps1");
+        fs::write(&post, "Set-Content -Path ($env:GISTSYNC_LOCAL_PATH + '.post') -Value 'ran'").unwrap();
+        f.mapping.hooks.pre_upload = {
+            let mut h = file_hook(&pre, true);
+            h.only_when_changed = false;
+            h
+        };
+        f.mapping.hooks.post_upload = {
+            let mut h = file_hook(&post, true);
+            h.only_when_changed = false;
+            h
+        };
+        let out = run_sync_cycle_with_hint(&f.ctx, &f.mapping, Trigger::ManualUpload).await;
+        assert_eq!(out.status, MappingStatus::Idle);
+        assert!(!f.local_path.with_extension("md.pre").exists(), "前置钩子不得执行（无同步动作可拦）");
+        assert!(f.local_path.with_extension("md.post").exists(), "取消仅变动执行时后置钩子应执行");
+        assert_eq!(f.fake.update_calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn manual_no_change_skips_hook_when_only_changed_true() {
+        let mut f = fixture("same", "same", Some("same"));
+        let post = f.dir.path().join("m-post2.ps1");
+        fs::write(&post, "Set-Content -Path ($env:GISTSYNC_LOCAL_PATH + '.post') -Value 'ran'").unwrap();
+        // only_when_changed 保持默认 true
+        f.mapping.hooks.post_upload = file_hook(&post, true);
+        let out = run_sync_cycle_with_hint(&f.ctx, &f.mapping, Trigger::ManualUpload).await;
+        assert_eq!(out.status, MappingStatus::Idle);
+        assert!(!f.local_path.with_extension("md.post").exists(), "仅变动执行开启时空跑不执行钩子");
+    }
+
+    #[tokio::test]
+    async fn manual_download_no_change_runs_post_hook() {
+        let mut f = fixture("same", "same", Some("same"));
+        let post = f.dir.path().join("m-dl-post.ps1");
+        fs::write(&post, "Set-Content -Path ($env:GISTSYNC_LOCAL_PATH + '.dlpost') -Value 'ran'").unwrap();
+        f.mapping.hooks.post_download = {
+            let mut h = file_hook(&post, true);
+            h.only_when_changed = false;
+            h
+        };
+        let out = run_sync_cycle_with_hint(&f.ctx, &f.mapping, Trigger::ManualDownload).await;
+        assert_eq!(out.status, MappingStatus::Idle);
+        assert!(f.local_path.with_extension("md.dlpost").exists());
+    }
+
+    #[tokio::test]
+    async fn post_download_script_modifying_file_triggers_upload_cycle() {
+        let mut f = fixture("old local", "new remote", Some("old local"));
+        let post = f.dir.path().join("process.ps1");
+        fs::write(&post, "Set-Content -Path $env:GISTSYNC_LOCAL_PATH -Value 'processed'").unwrap();
+        f.mapping.hooks.post_download = file_hook(&post, true);
+        let out = run_sync_cycle_with_hint(&f.ctx, &f.mapping, Trigger::Poll).await;
+        assert_eq!(out.status, MappingStatus::Idle);
+        // 下载后脚本加工本地 → 自写抑制不命中 → 下一轮自动上传（下载→加工→回传链路）
+        let out = run_sync_cycle_with_hint(&f.ctx, &f.mapping, Trigger::LocalSettled).await;
+        assert_eq!(out.status, MappingStatus::Idle);
+        assert_eq!(f.fake.update_calls(), 1, "加工后的内容应自动回传");
+        assert_eq!(remote_content(&f).await, "processed\n");
     }
 
     // ── 变化统计（V0.5）──────────────────────────────────────────────

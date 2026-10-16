@@ -353,10 +353,11 @@ fn validate_hooks(hooks: &crate::model::MappingHooks) -> Result<(), String> {
                     return Err(ipc_err("HOOK_SCRIPT_INVALID", "事件脚本仅支持 .ps1 / .bat / .cmd"));
                 }
             }
-            HookMode::Inline if !hook.script_content.is_empty() => {
-                if hook.script_content.chars().count() > 65536 {
-                    return Err(ipc_err("HOOK_SCRIPT_TOO_LARGE", "界面内脚本内容超过 64KB 限制"));
-                }
+            HookMode::Inline
+                if !hook.script_content.is_empty()
+                    && hook.script_content.chars().count() > 65536 =>
+            {
+                return Err(ipc_err("HOOK_SCRIPT_TOO_LARGE", "界面内脚本内容超过 64KB 限制"));
             }
             _ => {}
         }
