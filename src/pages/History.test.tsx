@@ -53,6 +53,13 @@ const commit = {
   committedAt: "2026-10-13T08:00:00Z",
 };
 
+/** 期望值独立实现：按本地时区从 Date 各分量拼接（防实现回归为 UTC 截断） */
+function expectLocal(iso: string): string {
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 function renderPage(initialEntry = "/history") {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
@@ -88,7 +95,7 @@ describe("History page", () => {
     renderPage();
     // 下拉 label 为显示名回退链（name 空 → gist 文件名）
     expect(await screen.findByText("todo.md")).toBeInTheDocument();
-    expect(await screen.findByText("2026-10-14 12:30:45")).toBeInTheDocument();
+    expect(await screen.findByText(expectLocal("2026-10-14T12:30:45.123Z"))).toBeInTheDocument();
     expect(screen.getByText("本地")).toBeInTheDocument();
     expect(screen.getByText("下载覆盖")).toBeInTheDocument();
     expect(screen.getByText("123 B")).toBeInTheDocument();
@@ -150,7 +157,7 @@ describe("History page", () => {
     await screen.findByText("20261014123045123-local.md");
     await userEvent.click(await screen.findByRole("tab", { name: /远端历史/ }));
     expect(await screen.findByText("abcdef1")).toBeInTheDocument();
-    expect(screen.getByText("2026-10-13 08:00:00")).toBeInTheDocument();
+    expect(screen.getByText(expectLocal("2026-10-13T08:00:00Z"))).toBeInTheDocument();
   });
 
   it("无映射时显示空态", async () => {

@@ -12,6 +12,7 @@ import {
 } from "../api/ipc";
 import { ipcErrorMessage, statusMessageText } from "../i18n/errors";
 import type { MappingStatus, MappingView } from "../types";
+import { formatTime } from "../time";
 import ConflictDialog from "../components/ConflictDialog";
 import MappingFileCell from "../components/MappingFileCell";
 
@@ -29,11 +30,6 @@ export function statusColor(status: MappingStatus): string {
     default:
       return "green";
   }
-}
-
-function formatTime(iso: string | null): string {
-  if (!iso) return "—";
-  return iso.replace("T", " ").slice(0, 19);
 }
 
 export default function Dashboard() {

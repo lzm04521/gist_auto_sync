@@ -25,6 +25,7 @@ import { ipcErrorMessage } from "../i18n/errors";
 import DiffView from "../components/DiffView";
 import { mappingDisplayName } from "../components/MappingFileCell";
 import type { GistCommit, HistoryEntry, HistoryReason, MappingView } from "../types";
+import { formatTime } from "../time";
 
 interface PreviewText {
   historical: string;
@@ -88,9 +89,6 @@ export default function History() {
   useEffect(() => {
     if (mappingId) void reloadLists(mappingId);
   }, [mappingId, reloadLists]);
-
-  const fmtTime = (iso: string) =>
-    new Date(iso).toISOString().replace("T", " ").slice(0, 19);
 
   const fmtBytes = (n: number) =>
     n < 1024
@@ -178,7 +176,7 @@ export default function History() {
                 columns={[
                   {
                     title: t("history.colTime"),
-                    render: (_, e) => fmtTime(e.ts),
+                    render: (_, e) => formatTime(e.ts),
                   },
                   {
                     title: t("history.colSide"),
@@ -246,7 +244,7 @@ export default function History() {
                   },
                   {
                     title: t("history.colCommittedAt"),
-                    render: (_, c) => fmtTime(c.committedAt),
+                    render: (_, c) => formatTime(c.committedAt),
                   },
                   {
                     title: t("common.actions"),

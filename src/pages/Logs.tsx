@@ -5,10 +5,7 @@ import { useTranslation } from "react-i18next";
 import { syncLogList } from "../api/ipc";
 import { ipcErrorMessage } from "../i18n/errors";
 import type { LogDirection, LogOutcome, LogTrigger, SyncLogEntry } from "../types";
-
-function formatTime(iso: string): string {
-  return iso.replace("T", " ").slice(0, 19);
-}
+import { formatTime } from "../time";
 
 const isManual = (t: LogTrigger) => t === "manualUpload" || t === "manualDownload";
 
